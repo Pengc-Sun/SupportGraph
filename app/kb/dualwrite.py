@@ -34,6 +34,11 @@ async def vectorize_pending(client, batch_size: int = 64) -> int:
     for batch in _batches(pending, batch_size):
         texts = [f"{r.category}\n{r.questions}\n{r.answer}" for r in batch]
         vectors = await embeddings.embed_texts(texts)
+        if len(vectors) != len(batch):
+            # zip 会静默截断:少回的块没向量却被标 done。宁可整批不写,重跑捡 pending。
+            raise RuntimeError(
+                f"嵌入返回 {len(vectors)} 条向量,与批次 {len(batch)} 块不符,拒绝截断双写"
+            )
         rows = [
             {"id": r.id, "vector": v, "question": r.questions, "answer": r.answer}
             for r, v in zip(batch, vectors)

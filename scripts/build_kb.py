@@ -1,22 +1,14 @@
 """CLI:把 data/kb/*.md 切块写入 knowledge_chunks(pending)。之后跑 vectorize_kb.py。
 运行:PYTHONPATH=. uv run python scripts/build_kb.py"""
 import asyncio
-import pathlib
 
 from app.kb import documents, dualwrite
-
-KB_DIR = pathlib.Path(__file__).resolve().parent.parent / "data" / "kb"
-# 文件 → content_type
-DOCS = {
-    "product-faq.md": "faq",
-    "returns-policy.md": "policy",
-    "after-sales-manual.md": "manual",
-}
+from app.kb.sources import KB_DIR, SOURCE_TYPES
 
 
 async def main() -> None:
     total = 0
-    for fname, ctype in DOCS.items():
+    for fname, ctype in SOURCE_TYPES.items():
         md = (KB_DIR / fname).read_text(encoding="utf-8")
         chunks = documents.build_chunks(md, content_type=ctype)
         ids = await dualwrite.write_pending(chunks)

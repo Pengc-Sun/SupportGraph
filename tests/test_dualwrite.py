@@ -55,3 +55,19 @@ async def test_vectorize_resumes_after_crash(db_session_factory, db_clean, milvu
     assert await repository.count_chunks_by_status("pending") == 0
     assert await repository.count_chunks_by_status("done") == 4
     assert milvus_client.count(milvus) == 4  # 无重无漏
+
+
+async def test_vectorize_rejects_vector_count_mismatch(db_session_factory, db_clean, milvus, monkeypatch):
+    """嵌入返回数与批次块数不符 → 立刻抛错;不许 zip 静默截断把没向量的块标 done。"""
+    await dualwrite.write_pending([_chunk("q1", "a1"), _chunk("q2", "a2")])
+
+    async def short_embed(texts):
+        # 批次 2 块只回 1 条向量:静默 zip 会丢掉 q2 却把两块都标 done
+        return [[1.0, 0.0, 1.0] + [0.0] * (milvus_client.DIM - 3)]
+
+    monkeypatch.setattr("app.kb.dualwrite.embeddings.embed_texts", short_embed)
+    with pytest.raises(RuntimeError):
+        await dualwrite.vectorize_pending(milvus, batch_size=8)
+    assert await repository.count_chunks_by_status("pending") == 2
+    assert await repository.count_chunks_by_status("done") == 0
+    assert milvus_client.count(milvus) == 0  # 抛错在 upsert 之前,一条都没写

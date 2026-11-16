@@ -1,4 +1,4 @@
-.PHONY: dev test eval eval-agent seed kb-build kb-vectorize kb-mine eval-retrieval seed-conv eval-mining
+.PHONY: dev test eval eval-agent seed kb-build kb-vectorize kb-mine eval-retrieval seed-conv eval-mining kb-preview kb-reset
 
 dev:
 	./scripts/dev.sh
@@ -32,3 +32,9 @@ seed-conv:
 
 eval-mining:
 	PYTHONPATH=. uv run python scripts/eval_mining.py
+
+kb-preview:
+	PYTHONPATH=. uv run python scripts/show_kb.py
+
+kb-reset:
+	PYTHONPATH=. uv run python scripts/reset_kb.py

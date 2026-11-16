@@ -166,3 +166,55 @@ async def list_conversations_with_messages() -> list[tuple[int, list[Message]]]:
             )).scalars())
             out.append((cid, msgs))
         return out
+
+async def knowledge_stats() -> dict:
+    """库存盘点(只读):总数 / pending / done / 关键条款数。"""
+    async with db.async_session() as s:
+        rows = (await s.execute(
+            select(KnowledgeChunk.vectorize_status, func.count())
+            .group_by(KnowledgeChunk.vectorize_status)
+        )).all()
+        by_status = {st: int(n) for st, n in rows}
+        key_clauses = int((await s.execute(
+            select(func.count()).select_from(KnowledgeChunk)
+            .where(KnowledgeChunk.is_key_clause == 1)
+        )).scalar_one())
+        return {
+            "total": sum(by_status.values()),
+            "pending": by_status.get("pending", 0),
+            "done": by_status.get("done", 0),
+            "key_clauses": key_clauses,
+        }
+
+async def list_recent_chunks(limit: int = 20) -> list[KnowledgeChunk]:
+    """最近入库的块,按 id 倒序。"""
+    async with db.async_session() as s:
+        result = await s.execute(
+            select(KnowledgeChunk).order_by(KnowledgeChunk.id.desc()).limit(limit)
+        )
+        return list(result.scalars())
+
+async def list_chunk_pairs() -> list[tuple[str, str]]:
+    """全部 (questions, answer) 对,供录入按「问法+正文」指纹查重。"""
+    async with db.async_session() as s:
+        result = await s.execute(select(KnowledgeChunk.questions, KnowledgeChunk.answer))
+        return [(q, a) for q, a in result.all()]
+
+async def staging_stats() -> dict:
+    """暂存表三态计数 + 批次数(只读)。"""
+    async with db.async_session() as s:
+        rows = (await s.execute(
+            select(QaExtractionStaging.status, func.count())
+            .group_by(QaExtractionStaging.status)
+        )).all()
+        by_status = {st: int(n) for st, n in rows}
+        batches = int((await s.execute(
+            select(func.count(func.distinct(QaExtractionStaging.batch_no)))
+        )).scalar_one())
+        return {
+            "extracted": by_status.get("extracted", 0),
+            "kept": by_status.get("kept", 0),
+            "discarded": by_status.get("discarded", 0),
+            "total": sum(by_status.values()),
+            "batches": batches,
+        }
