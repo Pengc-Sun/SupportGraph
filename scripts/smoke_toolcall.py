@@ -1,5 +1,9 @@
 """真实验证当前上游模型能否返回结构化 tool_calls。go/no-go 风险闸。"""
 import asyncio
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
