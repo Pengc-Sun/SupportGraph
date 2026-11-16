@@ -4,9 +4,17 @@ from pydantic import ValidationError
 from app.schemas.chat import ChatRequest
 from app.schemas.extract import AfterSalesTicket, ExtractRequest, RequestType
 
+def test_chat_request_user_id_contract():
+    req = ChatRequest(user_id="u1", message="hi")
+    assert req.conversation_id is None
+
 def test_chat_request_rejects_empty_message():
     with pytest.raises(ValidationError):
-        ChatRequest(session_id="s1", message="")
+        ChatRequest(user_id="u1", message="")
+
+def test_chat_request_rejects_empty_user_id():
+    with pytest.raises(ValidationError):
+        ChatRequest(user_id="", message="hi")
 
 def test_extract_request_rejects_empty_text():
     with pytest.raises(ValidationError):
