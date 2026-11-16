@@ -25,7 +25,7 @@ async def main() -> None:
             if r.status_code != 200:
                 print(f"❌ HTTP {r.status_code}:请求失败,响应体前 200 字符:{r.text[:200]}")
                 print(f"\n通过 {passed}/{len(SAMPLES)}(HTTP 错误,提前退出)")
-                return
+                raise SystemExit(1)
             body = r.json()
             names = {tc["name"] for tc in body["tool_calls"]}
             ok = (not names) if expect is None else bool(names & expect)
