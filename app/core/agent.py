@@ -31,14 +31,17 @@ def _text(msg: AIMessage) -> str:
 
 def _build_history(rows: list[Message]) -> list[BaseMessage]:
     """跨轮上下文:只回放 user 与「content 非空且非工具调用」的 assistant。
-    带 tool_calls 的 assistant(常夹带 preamble)不跨轮回放,避免污染续接。"""
-    out: list[BaseMessage] = [SystemMessage(AGENT_SYSTEM)]
+    带 tool_calls 的 assistant(常夹带 preamble)不跨轮回放,避免污染续接。
+    先裁剪再前置 SystemMessage:trim_messages 默认 include_system=False,
+    先放进去会被丢弃;system prompt 不占历史 token 预算(同 ch01 姿态)。"""
+    out: list[BaseMessage] = []
     for m in rows:
         if m.role == "user":
             out.append(HumanMessage(m.content or ""))
         elif m.role == "assistant" and m.content and not m.tool_calls:
             out.append(AIMessage(m.content))
-    return trim_history(out, max_tokens=settings.token_budget)
+    trimmed = trim_history(out, max_tokens=settings.token_budget)
+    return [SystemMessage(AGENT_SYSTEM), *trimmed]
 
 async def _prepare_turn(user_id, message, conversation_id, model):
     """共享编排前半:会话身份 → 落 user → 组装历史 → turn1 bind_tools 定工具 →
