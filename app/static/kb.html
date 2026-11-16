@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库录入 · 喵喵优选</title>
+<link rel="stylesheet" href="/static/acceptance.css">
+</head>
+<body>
+<script src="/static/admin.js"></script>
+<script src="/static/acceptance.js"></script>
+
+<div class="gate" id="gate">
+  <span class="g-title">📚 知识库</span>
+  <span class="g-item"><span class="g-num" id="g-total">—</span><span class="g-label">知识块</span></span>
+  <span class="g-item"><span class="g-num" id="g-pending">—</span><span class="g-label">待向量化</span></span>
+  <span class="g-item"><span class="g-num" id="g-milvus">—</span><span class="g-label">Milvus 条数</span></span>
+  <span class="g-item"><span class="g-num" id="g-key">—</span><span class="g-label">关键条款</span></span>
+  <span class="g-item"><span class="g-label">双写</span><span id="g-consistent"></span></span>
+  <span class="g-item" style="margin-left:auto"><button class="btn mini" id="btn-refresh">刷新读数</button></span>
+</div>
+
+<main>
+  <!-- ① 手工录入 -->
+  <section class="panel" id="ingest">
+    <h2>① 手工录入</h2>
+    <div class="p-sub">贴一段 Markdown → 切块预览(dry-run,不写库)→ 录入入库。预览什么样,入库就是什么样;重复录入按「问法+正文」指纹全跳过。</div>
+    <div class="row">
+      <label>内容类型</label>
+      <select id="in-type">
+        <option value="policy">policy(政策)</option>
+        <option value="faq">faq(商品问答)</option>
+        <option value="manual">manual(手册)</option>
+      </select>
+      <label>归属材料</label>
+      <select id="in-file"></select>
+      <button class="btn mini" id="btn-sample">填一段示例</button>
+    </div>
+    <textarea id="in-content" rows="10" placeholder="# 标题&#10;&#10;## 小节&#10;&#10;正文……(支持 Markdown 表格与长段落)"></textarea>
+    <div class="row">
+      <button class="btn" id="btn-preview">切块预览</button>
+      <button class="btn primary" id="btn-ingest">录入入库</button>
+      <label class="check"><input type="checkbox" id="in-vectorize" checked> 入库后顺手向量化</label>
+    </div>
+    <div id="preview-out"></div>
+  </section>
+
+  <div class="grid2">
+    <!-- ② 建库材料 -->
+    <section class="panel" id="sources">
+      <h2>② 建库材料</h2>
+      <div class="p-sub">data/kb/*.md 清单与就地切块读数(与 make kb-preview 同一份实现)。「看切块」把原文送进 ① 预览区。</div>
+      <div id="sources-out"><span class="muted">加载中…</span></div>
+      <div id="jobs-sources"></div>
+    </section>
+
+    <!-- ③ 对话挖知识 -->
+    <section class="panel" id="mining">
+      <h2>③ 对话挖知识</h2>
+      <div class="p-sub">历史对话 → LLM 抽问答对 → 暂存表三态(抽出 / 保留 / 丢弃)→ 去重保留项入库。重作业需二次确认。</div>
+      <div id="mining-out"><span class="muted">加载中…</span></div>
+      <div class="row">
+        <button class="btn mini" id="btn-staging">看暂存表逐条</button>
+      </div>
+      <div id="staging-out"></div>
+      <div id="jobs-mining"></div>
+    </section>
+
+    <!-- ④ 向量化与双写 -->
+    <section class="panel" id="dualwrite">
+      <h2>④ 向量化与双写</h2>
+      <div class="p-sub">MySQL 权威源(pending/done)与 Milvus 读模型按 id 对齐。中断重跑只捡 pending,按 id upsert 幂等补齐。</div>
+      <div class="row" id="dual-nums"></div>
+      <div class="row">
+        <button class="btn primary" id="btn-vectorize">向量化待补块</button>
+        <span class="muted">失败不回滚:块仍在 MySQL(pending),补跑一次即可。</span>
+      </div>
+      <div id="jobs-dual"></div>
+    </section>
+
+    <!-- ⑤ 检索自测 -->
+    <section class="panel" id="search">
+      <h2>⑤ 检索自测</h2>
+      <div class="p-sub">问题向量化 → Milvus dense 单路 Top-K,当场看召回哪几块、各自多少分。低于阈值算未命中。</div>
+      <div class="row">
+        <input type="text" id="s-query" placeholder="换个说法问一句,例如:邮费是多少" style="flex:1;min-width:200px">
+        <label>路线</label>
+        <select id="s-route"><option value="dense">dense 向量单路</option></select>
+        <label>Top-K</label>
+        <input type="number" id="s-topk" value="3" min="1" max="20" style="width:64px">
+        <button class="btn primary" id="btn-search">检索</button>
+      </div>
+      <div class="row" id="s-presets"></div>
+      <div id="search-out"></div>
+    </section>
+  </div>
+
+  <!-- ⑥ 最近入库 -->
+  <section class="panel" id="recent">
+    <h2>⑥ 最近入库</h2>
+    <div class="p-sub">按 id 倒序,最近 20 块与它们的向量化状态。</div>
+    <div id="recent-out"><span class="muted">加载中…</span></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+mountAdminNav("kb");
+const A = window.Acceptance;
+const $ = id => document.getElementById(id);
+
+const SAMPLE_MD = `# 运费与退货政策
+
+## 运费说明
+
+满 99 元包邮,未满 99 元收 10 元运费。偏远地区(新疆、西藏等)另加 15 元偏远费。
+
+## 退货时限表
+
+| 品类 | 退货时限 | 说明 |
+| --- | --- | --- |
+| 猫砂 | 7 天无理由 | 未开封 |
+| 智能猫砂盆 | 15 天无理由 | 配件齐全 |
+| 猫粮 | 7 天无理由 | 未开封 |
+`;
+const PRESETS = ["邮费是多少", "快递费怎么收", "多久能发货", "东西不想要了能退吗", "怎么开发票"];
+const FEATURES = ["表格按行拆", "递归切分+句级重叠"];
+
+// ---------- 库存闸条与各块读数 ----------
+function num(v) { return v == null ? "—" : String(v); }
+
+function renderGate(d) {
+  const m = d.mysql;
+  $("g-total").textContent = num(m && m.total);
+  $("g-pending").textContent = num(m && m.pending);
+  $("g-milvus").textContent = num(d.milvus_count);
+  $("g-key").textContent = num(m && m.key_clauses);
+  $("g-consistent").innerHTML =
+    d.consistent === true ? A.pill("一致", "ok")
+    : d.consistent === false ? A.pill("对不上", "err")
+    : A.pill("读不到", "mute");
+}
+
+function renderSources(d) {
+  const rows = (d.sources || []).map(s =>
+    "<tr><td>" + A.esc(s.filename) + "</td><td>" + A.esc(s.content_type) + "</td>"
+    + "<td>" + (s.exists ? A.pill("在", "ok") : A.pill("缺文件", "err")) + "</td>"
+    + '<td class="num">' + num(s.chunks) + '</td><td class="num">' + num(s.key_clauses) + "</td>"
+    + "<td>" + (s.features && s.features.length ? s.features.map(f => A.pill(f, "info")).join(" ") : '<span class="muted">—</span>') + "</td>"
+    + '<td><button class="btn mini" data-view-source="' + A.esc(s.filename) + '"' + (s.exists ? "" : " disabled") + ">看切块</button></td></tr>"
+  ).join("");
+  $("sources-out").innerHTML =
+    '<table class="tb"><thead><tr><th>文件</th><th>类型</th><th>状态</th><th>块数</th><th>关键条款</th><th>触发特性</th><th></th></tr></thead><tbody>'
+    + rows + "</tbody></table>";
+  $("sources-out").querySelectorAll("[data-view-source]").forEach(btn =>
+    btn.addEventListener("click", () => viewSource(btn.dataset.viewSource)));
+  // 归属材料下拉与清单同源
+  const sel = $("in-file");
+  const cur = sel.value;
+  sel.innerHTML = (d.sources || []).map(s =>
+    '<option value="' + A.esc(s.filename) + '">' + A.esc(s.filename) + "</option>").join("");
+  if (cur) sel.value = cur;
+}
+
+function renderMining(d) {
+  const s = d.staging;
+  if (!s) { $("mining-out").innerHTML = '<span class="muted">暂存表读不到(MySQL 未起?)</span>'; return; }
+  $("mining-out").innerHTML = '<div class="row">'
+    + '<span class="g-item"><span class="g-num">' + s.extracted + '</span><span class="g-label">抽出待去重</span></span>'
+    + '<span class="g-item"><span class="g-num">' + s.kept + '</span><span class="g-label">去重保留</span></span>'
+    + '<span class="g-item"><span class="g-num">' + s.discarded + '</span><span class="g-label">去重丢弃</span></span>'
+    + '<span class="g-item"><span class="g-num">' + s.batches + '</span><span class="g-label">批次</span></span>'
+    + "</div>";
+}
+
+function renderDual(d) {
+  const m = d.mysql;
+  $("dual-nums").innerHTML =
+    '<span class="g-item"><span class="g-num">' + num(m && m.pending) + '</span><span class="g-label">pending</span></span>'
+    + '<span class="g-item"><span class="g-num">' + num(m && m.done) + '</span><span class="g-label">done</span></span>'
+    + '<span class="g-item"><span class="g-num">' + num(d.milvus_count) + '</span><span class="g-label">Milvus 条数</span></span>'
+    + (d.consistent === true ? A.pill("双写一致", "ok")
+      : d.consistent === false ? A.pill("双写对不上", "err")
+      : A.pill("双写读不到", "mute"));
+}
+
+function renderRecent(d) {
+  if (!d.mysql) { $("recent-out").innerHTML = '<span class="muted">MySQL 读不到</span>'; return; }
+  const rows = (d.recent || []).map(r =>
+    "<tr><td>" + r.id + "</td><td>" + A.esc(r.questions) + "</td><td>" + A.esc(r.content_type) + "</td>"
+    + "<td>" + (r.is_key_clause ? A.pill("关键", "warn") : "—") + "</td>"
+    + "<td>" + (r.vectorize_status === "done" ? A.pill("done", "ok") : A.pill("pending", "warn")) + "</td>"
+    + "<td>" + A.fmtTime(r.created_at) + "</td></tr>").join("");
+  $("recent-out").innerHTML = rows
+    ? '<table class="tb"><thead><tr><th>id</th><th>问法</th><th>类型</th><th>关键条款</th><th>状态</th><th>入库时间</th></tr></thead><tbody>' + rows + "</tbody></table>"
+    : '<span class="muted">库里还没有块。先在 ② 按「重跑 离线建库」,或在 ① 贴一段录入。</span>';
+}
+
+async function refresh() {
+  try {
+    const d = await A.api("/api/kb/overview");
+    renderGate(d); renderSources(d); renderMining(d); renderDual(d); renderRecent(d);
+  } catch (e) {
+    A.toast("概览读数失败:" + e.message, "err");
+  }
+}
+
+// ---------- ① 预览与录入 ----------
+function renderPreview(d) {
+  const flags = FEATURES.map(f =>
+    d.features.includes(f) ? A.pill("已触发:" + f, "info") : A.pill("未触发:" + f, "mute")).join(" ");
+  const cards = d.chunks.map((c, i) => {
+    const dup = c.duplicate === true ? A.pill("重复(将跳过)", "warn")
+      : c.duplicate === false ? A.pill("新块", "ok") : A.pill("重复读不到", "mute");
+    return '<div class="chunk-card' + (c.duplicate === true ? " dup" : "") + '">'
+      + '<div class="c-head"><b>#' + (i + 1) + "</b>" + dup
+      + (c.is_key_clause ? A.pill("关键条款", "warn") : "")
+      + (c.is_table ? A.pill("表格块", "info") : "")
+      + '<span class="c-path">' + A.esc(c.section_path || "(无标题)") + " · " + c.answer.length + " 字</span></div>"
+      + '<div class="c-q">' + A.esc(c.questions) + "</div>"
+      + '<pre class="c-a">' + A.esc(c.answer) + "</pre></div>";
+  }).join("");
+  $("preview-out").innerHTML =
+    '<div class="feat-flags"><b style="font-size:13px">共 ' + d.count + " 块 · 关键条款 " + d.key_clauses + " 块</b>" + flags + "</div>"
+    + cards;
+}
+
+function ingestBody() {
+  return { content: $("in-content").value, content_type: $("in-type").value, filename: $("in-file").value };
+}
+
+async function doPreview() {
+  try {
+    const d = await A.post("/api/kb/preview", ingestBody());
+    renderPreview(d);
+  } catch (e) {
+    $("preview-out").innerHTML = '<div class="err-text">' + A.esc(e.message) + "</div>";
+  }
+}
+
+async function doIngest() {
+  const btn = $("btn-ingest");
+  btn.disabled = true;
+  try {
+    const d = await A.post("/api/kb/ingest", { ...ingestBody(), vectorize: $("in-vectorize").checked });
+    A.toast("入库 " + d.inserted + " 块,跳过重复 " + d.skipped + " 块,向量化 " + d.vectorized + " 块");
+  } catch (e) {
+    A.toast(e.message, "err");  // 502 文案自带「已入库 N 块(pending),补跑一次即可」
+  }
+  btn.disabled = false;
+  refresh();
+  if ($("in-content").value.trim()) doPreview();  // 重录时预览区即时标「重复」
+}
+
+async function viewSource(filename) {
+  try {
+    const d = await A.api("/api/kb/sources/" + encodeURIComponent(filename));
+    $("in-type").value = d.content_type === "mined" ? "faq" : d.content_type;
+    $("in-file").value = d.filename;
+    $("in-content").value = d.content;
+    await doPreview();
+    $("ingest").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    A.toast(e.message, "err");
+  }
+}
+
+// ---------- ③ 暂存表逐条 ----------
+let stagingOpen = false;
+async function toggleStaging() {
+  stagingOpen = !stagingOpen;
+  $("btn-staging").textContent = stagingOpen ? "收起暂存表" : "看暂存表逐条";
+  if (!stagingOpen) { $("staging-out").innerHTML = ""; return; }
+  try {
+    const d = await A.api("/api/kb/staging");
+    const kind = { extracted: "info", kept: "ok", discarded: "mute" };
+    const label = { extracted: "抽出", kept: "保留", discarded: "丢弃" };
+    $("staging-out").innerHTML = d.items.length
+      ? d.items.map(it =>
+        '<div class="staging-item"><div class="s-meta">' + A.pill(label[it.status], kind[it.status])
+        + "<span>批次 " + A.esc(it.batch_no) + "</span><span>" + A.esc(it.source_ref || "") + "</span><span>#" + it.id + "</span></div>"
+        + '<div class="s-q">' + A.esc(it.question) + "</div>"
+        + '<div class="s-a">' + A.esc(it.answer) + "</div></div>").join("")
+      : '<span class="muted">暂存表是空的。先「灌历史会话种子」,再「对话挖知识」。</span>';
+  } catch (e) {
+    $("staging-out").innerHTML = '<div class="err-text">' + A.esc(e.message) + "</div>";
+  }
+}
+
+// ---------- ④ 补向量 ----------
+async function doVectorize() {
+  const btn = $("btn-vectorize");
+  btn.disabled = true;
+  try {
+    const d = await A.post("/api/kb/vectorize");
+    A.toast("向量化 " + d.vectorized + " 块;剩余 pending " + d.pending + ",Milvus 共 " + d.milvus_count + " 条");
+  } catch (e) {
+    A.toast(e.message, "err");
+  }
+  btn.disabled = false;
+  refresh();
+}
+
+// ---------- ⑤ 检索自测 ----------
+async function doSearch() {
+  const query = $("s-query").value.trim();
+  if (!query) { A.toast("先输一句问话", "warn"); return; }
+  $("search-out").innerHTML = '<span class="muted">检索中…</span>';
+  try {
+    const d = await A.post("/api/kb/search", { query, top_k: Number($("s-topk").value) || 3 });
+    $("search-out").innerHTML = d.hits.length
+      ? d.hits.map(h =>
+        '<div class="hit"><div class="h-head"><span class="h-score">' + h.score.toFixed(4) + "</span>"
+        + A.pill("id " + h.id, "mute") + "<b>" + A.esc(h.question) + "</b></div>"
+        + '<div class="h-a">' + A.esc(h.answer) + "</div></div>").join("")
+      : '<span class="muted">未命中(全部低于阈值,或库里还没有向量)。低于阈值保留空 hits 分支,与 query_faq 契约一致。</span>';
+  } catch (e) {
+    $("search-out").innerHTML = '<div class="err-text">' + A.esc(e.message) + "</div>";
+  }
+}
+
+// ---------- 装配 ----------
+$("btn-refresh").addEventListener("click", refresh);
+$("btn-preview").addEventListener("click", doPreview);
+$("btn-ingest").addEventListener("click", doIngest);
+$("btn-sample").addEventListener("click", () => {
+  $("in-type").value = "policy";
+  $("in-content").value = SAMPLE_MD;
+  doPreview();
+});
+$("btn-staging").addEventListener("click", toggleStaging);
+$("btn-vectorize").addEventListener("click", doVectorize);
+$("btn-search").addEventListener("click", doSearch);
+$("s-query").addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
+$("s-presets").innerHTML = PRESETS.map(q => '<button class="chip">' + A.esc(q) + "</button>").join("");
+$("s-presets").querySelectorAll(".chip").forEach(ch =>
+  ch.addEventListener("click", () => { $("s-query").value = ch.textContent; doSearch(); }));
+
+// 作业面板只挂载一次;跑完回调只刷数据区,日志尾另有缓存,重建也不丢
+const onJobFinish = (name, st) => {
+  refresh();
+  if (st.exit_code !== 0) A.toast(name + " 结束但 exit=" + st.exit_code + ",看日志尾", "warn");
+};
+A.mountJobs($("jobs-sources"), ["kb-preview", "kb-build"], { onFinish: onJobFinish });
+A.mountJobs($("jobs-mining"), ["seed-conv", "kb-mine"], { onFinish: onJobFinish });
+A.mountJobs($("jobs-dual"), ["kb-vectorize", "kb-reset"], { onFinish: onJobFinish });
+
+refresh();
+</script>
+</body>
+</html>

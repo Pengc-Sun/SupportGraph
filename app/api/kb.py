@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from app.core import jobs, retrieval
 from app.db import repository
-from app.kb import documents, dualwrite, milvus_client
+from app.kb import chunking, documents, dualwrite, milvus_client
 from app.kb.dedup import normalize_question
 from app.kb.sources import CONTENT_TYPES, KB_DIR, SOURCE_TYPES
 
@@ -91,15 +91,36 @@ async def overview() -> dict:
     except Exception:
         logger.warning("overview:Milvus 读不到", exc_info=True)
     consistent = None if mysql is None or milvus_count is None else mysql["done"] == milvus_count
-    # 材料清单与作业状态不依赖任何外部服务,永远给得出来
-    sources = [
-        {"filename": f, "content_type": t, "exists": (KB_DIR / f).exists()}
-        for f, t in SOURCE_TYPES.items()
-    ]
+    # 材料清单与作业状态不依赖任何外部服务,永远给得出来;就地切块读数也是 dry-run
+    sources = []
+    for f, t in SOURCE_TYPES.items():
+        entry = {"filename": f, "content_type": t, "exists": (KB_DIR / f).exists(),
+                 "chunks": None, "key_clauses": None, "features": None}
+        if entry["exists"]:
+            try:
+                md = (KB_DIR / f).read_text(encoding="utf-8")
+                cs = documents.build_chunks(md, content_type=t)
+                entry.update(chunks=len(cs), key_clauses=sum(c.is_key_clause for c in cs),
+                             features=documents.detect_features(md))
+            except Exception:
+                logger.warning("overview:材料 %s 切块读数失败", f, exc_info=True)
+        sources.append(entry)
     return {
         "mysql": mysql, "milvus_count": milvus_count, "consistent": consistent,
         "staging": staging, "sources": sources, "jobs": jobs.list_jobs(), "recent": recent,
     }
+
+
+@router.get("/sources/{filename}")
+async def source_content(filename: str) -> dict:
+    """材料原文(白名单精确匹配,路径穿越天然 404),供页面「看切块」送预览区。"""
+    if filename not in SOURCE_TYPES:
+        raise HTTPException(status_code=404, detail="文件不在建库材料清单中")
+    path = KB_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return {"filename": filename, "content_type": SOURCE_TYPES[filename],
+            "content": path.read_text(encoding="utf-8")}
 
 
 @router.post("/preview")
@@ -107,10 +128,26 @@ async def preview(req: PreviewRequest) -> dict:
     """dry-run:只切不写,零 DB 写入。预览什么样,入库就是什么样。"""
     _validate(req)
     chunks = documents.build_chunks(req.content, content_type=req.content_type)
+    # 重复标记只读指纹;MySQL 读不到回 None(读不到 ≠ 不重复)
+    try:
+        existing = {_fingerprint(q, a) for q, a in await repository.list_chunk_pairs()}
+    except Exception:
+        logger.warning("preview:MySQL 读不到,重复标记不可判", exc_info=True)
+        existing = None
+    out = []
+    for c in chunks:
+        d = _chunk_dict(c)
+        d["is_table"] = chunking.is_table_block(c.answer)
+        d["duplicate"] = (
+            None if existing is None
+            else _fingerprint(c.questions, c.answer) in existing
+        )
+        out.append(d)
     return {
         "count": len(chunks),
         "key_clauses": sum(c.is_key_clause for c in chunks),
-        "chunks": [_chunk_dict(c) for c in chunks],
+        "features": documents.detect_features(req.content),
+        "chunks": out,
     }
 
 

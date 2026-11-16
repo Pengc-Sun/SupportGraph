@@ -25,3 +25,13 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 @app.get("/", include_in_schema=False)
 async def index() -> RedirectResponse:
     return RedirectResponse("/static/index.html")
+
+
+@app.get("/kb", include_in_schema=False)
+async def kb_page() -> RedirectResponse:
+    return RedirectResponse("/static/kb.html")
+
+
+@app.get("/admin", include_in_schema=False)
+async def admin_page() -> RedirectResponse:
+    return RedirectResponse("/static/admin.html")

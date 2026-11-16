@@ -20,6 +20,21 @@ def _is_key(title: str, body: str) -> int:
     return int(any(t in head for t in _KEY_TERMS))
 
 
+def detect_features(md: str, chunk_size: int = 400, table_max_rows: int = 10) -> list[str]:
+    """按 build_chunks 的同款分派判断触发了哪些切块特性(dry-run,CLI 与预览 API 同读)。"""
+    feats: set[str] = set()
+    for sec in chunking.split_sections(md):
+        body = sec.page_content.strip()
+        if not body:
+            continue
+        if chunking.is_table_block(body):
+            if len(chunking.split_table_rows(body, table_max_rows)) > 1:
+                feats.add("表格按行拆")
+        elif len(chunking.recursive_split(body, chunk_size, chunk_overlap=0)) > 1:
+            feats.add("递归切分+句级重叠")
+    return sorted(feats)
+
+
 def build_chunks(
     md: str, content_type: str,
     chunk_size: int = 400, overlap: int = 60, table_max_rows: int = 10,

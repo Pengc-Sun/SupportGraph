@@ -2,7 +2,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.db import repository
-from app.kb import documents, milvus_client
+from app.kb import chunking, documents, milvus_client
 from app.main import app
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -48,7 +48,8 @@ def _chunk_dicts(chunks):
     return [
         {"category": c.category, "questions": c.questions, "answer": c.answer,
          "section_path": c.section_path, "content_type": c.content_type,
-         "is_key_clause": c.is_key_clause}
+         "is_key_clause": c.is_key_clause,
+         "is_table": chunking.is_table_block(c.answer), "duplicate": False}
         for c in chunks
     ]
 
@@ -290,6 +291,72 @@ async def test_staging_endpoint(client, db_session_factory, db_clean):
         assert len(items) == 1 and items[0]["question"] == "q1"
         r3 = await c.get("/api/kb/staging", params={"status": "bogus"})
         assert r3.status_code == 400
+
+
+# ---- T18:预览标记 / 材料清单读数 / 材料原文白名单 ----
+
+async def test_preview_flags_duplicates_after_ingest(client, db_session_factory, db_clean):
+    """预览逐块标「是否与库里重复」:入库前全 False,入库后全 True;仍是 dry-run。"""
+    async with client as c:
+        r0 = await c.post("/api/kb/preview", json=BODY)
+        assert all(ch["duplicate"] is False for ch in r0.json()["chunks"])
+        await c.post("/api/kb/ingest", json=BODY)
+        r1 = await c.post("/api/kb/preview", json=BODY)
+        assert all(ch["duplicate"] is True for ch in r1.json()["chunks"])
+    assert (await repository.knowledge_stats())["total"] == 2  # 预览没多写一块
+
+
+async def test_preview_marks_table_chunks_and_features(client, db_session_factory, db_clean):
+    table_body = {"content": TABLE_MD, "content_type": "manual", "filename": "after-sales-manual.md"}
+    long_body = {"content": LONG_MD, "content_type": "manual", "filename": "after-sales-manual.md"}
+    async with client as c:
+        d = (await c.post("/api/kb/preview", json=table_body)).json()
+        assert all(ch["is_table"] for ch in d["chunks"])
+        assert "表格按行拆" in d["features"]
+        d2 = (await c.post("/api/kb/preview", json=long_body)).json()
+        assert not any(ch["is_table"] for ch in d2["chunks"])
+        assert "递归切分+句级重叠" in d2["features"]
+        d3 = (await c.post("/api/kb/preview", json=BODY)).json()
+        assert d3["features"] == []  # 短 FAQ 两个特性都不触发
+
+
+async def test_preview_duplicate_none_when_mysql_down(client, db_session_factory, db_clean, monkeypatch):
+    """MySQL 读不到:重复标记回 None(读不到),预览本身照样 200。"""
+    async def boom():
+        raise ConnectionError("MySQL 没起")
+    monkeypatch.setattr(repository, "list_chunk_pairs", boom)
+    async with client as c:
+        r = await c.post("/api/kb/preview", json=BODY)
+    assert r.status_code == 200
+    d = r.json()
+    assert d["count"] == 2
+    assert all(ch["duplicate"] is None for ch in d["chunks"])
+
+
+async def test_overview_sources_carry_chunk_stats(client, db_session_factory, db_clean):
+    """材料清单带就地切块读数:块数 / 关键条款 / 触发特性,与 build_chunks 一致。"""
+    from app.kb.sources import KB_DIR
+    async with client as c:
+        r = await c.get("/api/kb/overview")
+    for s in r.json()["sources"]:
+        md = (KB_DIR / s["filename"]).read_text(encoding="utf-8")
+        expected = documents.build_chunks(md, content_type=s["content_type"])
+        assert s["chunks"] == len(expected)
+        assert s["key_clauses"] == sum(ch.is_key_clause for ch in expected)
+        assert isinstance(s["features"], list)
+    assert (await repository.knowledge_stats())["total"] == 0  # 就地切块不写库
+
+
+async def test_source_content_whitelist(client):
+    from app.kb.sources import KB_DIR
+    async with client as c:
+        r = await c.get("/api/kb/sources/product-faq.md")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["content_type"] == "faq"
+        assert d["content"] == (KB_DIR / "product-faq.md").read_text(encoding="utf-8")
+        assert (await c.get("/api/kb/sources/not-listed.md")).status_code == 404
+        assert (await c.get("/api/kb/sources/..%2F..%2Fapp%2Fconfig.py")).status_code == 404
 
 
 # ---- 配套 CLI(sources.py 单一清单)----

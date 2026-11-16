@@ -27,6 +27,11 @@
     border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer;
   }
   #new-chat:hover { border-color: var(--brand); color: var(--brand); }
+  #admin-link {
+    font-size: 13px; color: var(--sub); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px;
+  }
+  #admin-link:hover { border-color: var(--brand); color: var(--brand); }
   #messages {
     flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px;
     max-width: 860px; width: 100%; margin: 0 auto;
@@ -98,6 +103,7 @@
     <div class="sub">订单 / 物流 / 商品 / 售后,问我就好</div>
   </div>
   <div class="spacer"></div>
+  <a id="admin-link" href="/admin">后台管理</a>
   <button id="new-chat">+ 新对话</button>
 </header>
 <div id="messages"></div>

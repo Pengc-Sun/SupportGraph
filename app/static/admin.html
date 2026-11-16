@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>后台管理 · 喵喵优选</title>
+<link rel="stylesheet" href="/static/acceptance.css">
+</head>
+<body>
+<script src="/static/admin.js"></script>
+<script src="/static/acceptance.js"></script>
+<main>
+  <div class="panel">
+    <h2>后台管理</h2>
+    <div class="p-sub">每块一张卡:几个关键数 + 一句结论。某块的依赖没起,只让它自己那张卡显示读数失败,不连坐整页。</div>
+    <div id="cards" class="cards"><div class="muted">加载中…</div></div>
+  </div>
+</main>
+<script>
+"use strict";
+mountAdminNav("admin");
+const A = window.Acceptance;
+
+// 状态药丸:API 给「正常 / 读数失败」;「要干活 / 没数据」由关键数推导
+function cardStatus(card) {
+  if (card.status === "读数失败") return { text: "读数失败", kind: "err" };
+  const m = card.metrics || {};
+  if (m.total === 0) return { text: "没数据", kind: "mute" };
+  if (m.pending > 0 || m.consistent === false) return { text: "要干活", kind: "warn" };
+  return { text: "正常", kind: "ok" };
+}
+
+const METRIC_LABELS = {
+  total: "知识块", pending: "待向量化", done: "已向量化", key_clauses: "关键条款",
+  milvus_count: "Milvus 条数", consistent: "双写", embed_configured: "嵌入 key",
+};
+function metricText(key, v) {
+  if (v == null) return "—";
+  if (key === "consistent") return v ? "一致" : "对不上";
+  if (key === "embed_configured") return v ? "已配置" : "未配置";
+  return String(v);
+}
+
+function renderCard(card) {
+  const st = cardStatus(card);
+  const m = card.metrics || {};
+  const metrics = Object.keys(METRIC_LABELS)
+    .filter(k => k in m)
+    .map(k => '<div class="m"><b>' + A.esc(metricText(k, m[k])) + "</b><span>"
+      + METRIC_LABELS[k] + "</span></div>").join("");
+  const div = document.createElement("div");
+  div.className = "card";
+  div.innerHTML =
+    '<div class="c-title"><h3>' + A.esc(card.title) + "</h3>" + A.pill(st.text, st.kind) + "</div>"
+    + '<div class="c-summary">' + A.esc(card.summary || "") + "</div>"
+    + '<div class="c-metrics">' + metrics + "</div>"
+    + '<a class="btn primary" href="' + A.esc(card.path) + '">进入 ' + A.esc(card.title) + "</a>";
+  return div;
+}
+
+async function load() {
+  const box = document.getElementById("cards");
+  try {
+    const d = await A.api("/api/admin/overview");
+    box.innerHTML = "";
+    (d.cards || []).forEach(c => box.appendChild(renderCard(c)));
+    if (!(d.cards || []).length) box.innerHTML = '<div class="muted">还没有注册任何模块。</div>';
+  } catch (e) {
+    box.innerHTML = '<div class="err-text">聚合首页读数失败:' + A.esc(e.message) + "</div>";
+  }
+}
+load();
+</script>
+</body>
+</html>
