@@ -2,6 +2,8 @@
 -- faq 种子数据。幂等靠 question 唯一;重复执行不新增。
 -- 运维对账:执行后应有 6 行。
 
+SET NAMES utf8mb4;
+
 INSERT INTO faq (question, answer, category)
 SELECT * FROM (
   SELECT '退货政策' AS q, '支持 7 天无理由退货,商品需保持完好、不影响二次销售,以平台售后规则为准。' AS a, '售后' AS c
