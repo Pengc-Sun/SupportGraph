@@ -2,7 +2,7 @@ from langchain_openai import ChatOpenAI
 
 from app.config import settings
 
-def get_chat_model(streaming: bool = False) -> ChatOpenAI:
+def get_chat_model(streaming: bool = False, extra_body: dict | None = None) -> ChatOpenAI:
     """直连聊天上游。地址、模型名、密钥全从 .env 来,换上游不动这里。"""
     return ChatOpenAI(
         model=settings.chat_model,
@@ -10,4 +10,5 @@ def get_chat_model(streaming: bool = False) -> ChatOpenAI:
         api_key=settings.chat_api_key,
         streaming=streaming,
         temperature=0.3,
+        extra_body=extra_body,
     )

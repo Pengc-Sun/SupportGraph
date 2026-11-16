@@ -19,7 +19,7 @@ SAMPLES = [
 
 async def main() -> None:
     passed = 0
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
         for msg, expect in SAMPLES:
             r = await client.post(f"{BASE}/api/agent", json={"user_id": "eval", "message": msg})
             if r.status_code != 200:
