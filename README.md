@@ -4,7 +4,7 @@ FastAPI + LangChain,模型上游直连。
 
 ## 启动
 
-    cp .env.example .env   # 填入 CHAT_API_KEY(硅基流动)
+    cp .env.example .env   # 填入 CHAT_API_KEY(DeepSeek 官方 platform.deepseek.com)
     make dev               # :8000 应用
 
 ## 验收

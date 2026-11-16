@@ -1,5 +1,5 @@
 # scripts/eval_agent.py
-"""标注样例评估:核对上游模型(当前 DeepSeek-V4-Flash)是否按预期选中工具。需服务运行中。"""
+"""标注样例评估:核对上游模型(当前 DeepSeek 官方 deepseek-flash)是否按预期选中工具。需服务运行中。"""
 import asyncio
 
 import httpx
