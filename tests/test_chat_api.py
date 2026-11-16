@@ -53,6 +53,32 @@ def test_chat_persists_history_for_next_turn():
     history = chat_api.store.get("s2")
     assert [m.content for m in history] == ["第一问", "第一轮答", "第二问", "第二轮答"]
 
+def test_chat_upstream_error_emits_error_frame_without_done_or_history():
+    """astream 抛异常时:出现 event: error 帧 + 错误 JSON,无 [DONE],历史不落该轮。"""
+
+    class ExplodingChatModel(FakeListChatModel):
+        async def astream(self, *args, **kwargs):
+            raise RuntimeError("upstream stream down")
+            yield  # pragma: no cover - 使本方法成为异步生成器
+
+    app.dependency_overrides[chat_api.get_model] = lambda: ExplodingChatModel(
+        responses=["unused"]
+    )
+    client = TestClient(app)
+    with client.stream(
+        "POST", "/api/chat", json={"session_id": "s-err", "message": "在吗"}
+    ) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        lines = list(resp.iter_lines())
+    assert "event: error" in lines
+    payloads = [
+        json.loads(line[len("data: "):]) for line in lines if line.startswith("data: ")
+    ]
+    assert payloads == [{"message": "上游模型暂时不可用,请稍后重试"}]
+    assert "data: [DONE]" not in lines
+    assert chat_api.store.get("s-err") == []
+
 def test_chat_validates_empty_message():
     client = make_client(["x"])
     assert (

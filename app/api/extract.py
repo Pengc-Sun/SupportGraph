@@ -19,7 +19,11 @@ async def extract(
     req: ExtractRequest, extractor: Runnable = Depends(get_extractor)
 ) -> AfterSalesTicket:
     try:
-        return await extractor.ainvoke({"text": req.text})
+        result = await extractor.ainvoke({"text": req.text})
     except Exception as exc:
         logger.exception("结构化提取失败")
         raise HTTPException(status_code=502, detail="上游模型暂时不可用,请稍后重试") from exc
+    if result is None:
+        # with_structured_output 解析失败可能返回 None 而不抛异常,同样按上游故障处理
+        raise HTTPException(status_code=502, detail="上游模型暂时不可用,请稍后重试")
+    return result

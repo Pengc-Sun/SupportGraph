@@ -9,7 +9,7 @@ SAMPLES = pathlib.Path(__file__).parent.parent / "tests/data/extract_samples.jso
 BASE = "http://localhost:8000"
 
 def main() -> int:
-    samples = json.loads(SAMPLES.read_text())
+    samples = json.loads(SAMPLES.read_text(encoding="utf-8"))
     failures = 0
     for i, s in enumerate(samples, 1):
         r = httpx.post(f"{BASE}/api/extract", json={"text": s["text"]}, timeout=60)
@@ -21,7 +21,7 @@ def main() -> int:
         failures += not ok
         print(f"[{status}] #{i} {s['text'][:24]}...")
         print(f"       期望 order_id={exp['order_id']} type={exp['request_type']}")
-        print(f"       实际 order_id={got['order_id']} type={got['request_type']} 方案={got['expected_solution']}")
+        print(f"       实际 order_id={got['order_id']} type={got['request_type']} 方案={got.get('expected_solution')}")
     print(f"\n{len(samples) - failures}/{len(samples)} 通过")
     return 1 if failures else 0
 

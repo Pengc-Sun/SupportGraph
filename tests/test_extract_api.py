@@ -34,6 +34,13 @@ def test_extract_upstream_failure_returns_502():
     assert resp.status_code == 502
     assert "detail" in resp.json()
 
+def test_extract_none_result_returns_502():
+    """with_structured_output 解析失败可能返回 None 而非抛异常,须映射为 502。"""
+    client = override(RunnableLambda(lambda _: None))
+    resp = client.post("/api/extract", json={"text": "订单 MH20260701123 想退款"})
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "上游模型暂时不可用,请稍后重试"
+
 def test_extract_validates_empty_text():
     client = override(RunnableLambda(lambda _: None))
     assert client.post("/api/extract", json={"text": ""}).status_code == 422
