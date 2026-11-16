@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>喵喵优选 · 小喵客服</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --ink: #1f2329; --sub: #8a919f;
+    --brand: #ff7a45; --brand-soft: #fff1ea; --user: #ff7a45; --line: #e6e8eb;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--ink); height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    padding: 12px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+  }
+  header .logo { font-size: 22px; }
+  header h1 { font-size: 16px; font-weight: 600; }
+  header .sub { font-size: 12px; color: var(--sub); }
+  header .spacer { flex: 1; }
+  #new-chat {
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  #new-chat:hover { border-color: var(--brand); color: var(--brand); }
+  #messages {
+    flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px;
+    max-width: 860px; width: 100%; margin: 0 auto;
+  }
+  .msg { display: flex; gap: 10px; align-items: flex-start; }
+  .msg.user { flex-direction: row-reverse; }
+  .avatar {
+    width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 18px;
+    background: var(--brand-soft);
+  }
+  .msg.user .avatar { background: #e8f9ee; }
+  .bubble {
+    max-width: 76%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.7;
+    background: var(--panel); border: 1px solid var(--line); word-break: break-word;
+  }
+  .msg.user .bubble { background: var(--user); color: #fff; border: none; white-space: pre-wrap; }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .badge {
+    font-size: 12px; color: var(--sub); border: 1px dashed #c9cdd4; border-radius: 999px;
+    padding: 2px 10px; background: #fafbfc;
+  }
+  .dots { display: inline-flex; gap: 4px; padding: 4px 0; }
+  .dots i {
+    width: 6px; height: 6px; border-radius: 50%; background: #c9cdd4;
+    animation: blink 1.2s infinite ease-in-out;
+  }
+  .dots i:nth-child(2) { animation-delay: .2s; }
+  .dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  .err { color: #d4380d; font-size: 13px; }
+  /* markdown 内容样式 */
+  .md h1, .md h2, .md h3, .md h4 { margin: 8px 0 4px; line-height: 1.4; }
+  .md h1 { font-size: 18px; } .md h2 { font-size: 16px; } .md h3, .md h4 { font-size: 14px; }
+  .md p { margin: 4px 0; }
+  .md ul, .md ol { margin: 4px 0 4px 20px; }
+  .md blockquote { border-left: 3px solid var(--line); padding-left: 10px; color: var(--sub); margin: 6px 0; }
+  .md code { background: #f2f3f5; border-radius: 4px; padding: 1px 5px; font-size: 13px; font-family: ui-monospace, Menlo, monospace; }
+  .md pre { background: #f6f8fa; border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-x: auto; margin: 6px 0; }
+  .md pre code { background: none; padding: 0; }
+  .md table { border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+  .md th, .md td { border: 1px solid var(--line); padding: 4px 10px; }
+  .md th { background: #fafbfc; }
+  .md hr { border: none; border-top: 1px solid var(--line); margin: 8px 0; }
+  .md a { color: #1664ff; text-decoration: none; }
+  .md a:hover { text-decoration: underline; }
+  footer {
+    flex-shrink: 0; background: var(--panel); border-top: 1px solid var(--line); padding: 12px 20px;
+  }
+  .input-row { max-width: 860px; margin: 0 auto; display: flex; gap: 10px; }
+  #input {
+    flex: 1; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px;
+    font-size: 14px; outline: none; resize: none; height: 44px; font-family: inherit;
+  }
+  #input:focus { border-color: var(--brand); }
+  #send {
+    background: var(--brand); color: #fff; border: none; border-radius: 10px;
+    padding: 0 22px; font-size: 14px; cursor: pointer;
+  }
+  #send:disabled { opacity: .5; cursor: not-allowed; }
+  .hint { max-width: 860px; margin: 6px auto 0; font-size: 12px; color: var(--sub); }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">🐱</span>
+  <div>
+    <h1>喵喵优选 · 小喵客服</h1>
+    <div class="sub">订单 / 物流 / 商品 / 售后,问我就好</div>
+  </div>
+  <div class="spacer"></div>
+  <button id="new-chat">+ 新对话</button>
+</header>
+<div id="messages"></div>
+<footer>
+  <div class="input-row">
+    <textarea id="input" placeholder="例如:订单 1001 的物流到哪了?" rows="1"></textarea>
+    <button id="send">发送</button>
+  </div>
+  <div class="hint">试试:「订单 1001 的物流到哪了」「退货政策是什么」「邮费是多少」</div>
+</footer>
+<script>
+"use strict";
+const messagesEl = document.getElementById("messages");
+const inputEl = document.getElementById("input");
+const sendEl = document.getElementById("send");
+
+// ---------- 本地身份与会话 ----------
+function getUserId() {
+  let uid = localStorage.getItem("mewhelp_user_id");
+  if (!uid) {
+    uid = "u-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    localStorage.setItem("mewhelp_user_id", uid);
+  }
+  return uid;
+}
+function getConversationId() {
+  const v = localStorage.getItem("mewhelp_conversation_id");
+  return v ? Number(v) : null;
+}
+function setConversationId(id) { localStorage.setItem("mewhelp_conversation_id", String(id)); }
+function clearConversationId() { localStorage.removeItem("mewhelp_conversation_id"); }
+
+// ---------- 零依赖 markdown 渲染(先转义防注入) ----------
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function inlineMd(s) {
+  // 行内码优先,保护其中内容不被后续规则处理
+  const codes = [];
+  s = s.replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return "\u0000" + (codes.length - 1) + "\u0000"; });
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  s = s.replace(/(^|[^"(=])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+  s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => "<code>" + codes[Number(i)] + "</code>");
+  return s;
+}
+function renderMarkdown(raw) {
+  const lines = escapeHtml(raw).split("\n");
+  const out = [];
+  let i = 0, listType = null, inQuote = false;
+  const closeList = () => { if (listType) { out.push(listType === "ul" ? "</ul>" : "</ol>"); listType = null; } };
+  const closeQuote = () => { if (inQuote) { out.push("</blockquote>"); inQuote = false; } };
+  while (i < lines.length) {
+    const line = lines[i];
+    // 代码块
+    if (/^```/.test(line)) {
+      closeList(); closeQuote();
+      const buf = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++; // 跳过收尾 ```
+      out.push("<pre><code>" + buf.join("\n") + "</code></pre>");
+      continue;
+    }
+    // 表格:当前行含 | 且下一行是分隔行
+    if (line.includes("|") && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1]) && lines[i + 1].includes("-")) {
+      closeList(); closeQuote();
+      const cells = r => r.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(c => inlineMd(c.trim()));
+      const head = cells(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") { rows.push(cells(lines[i])); i++; }
+      out.push("<table><thead><tr>" + head.map(c => "<th>" + c + "</th>").join("") + "</tr></thead><tbody>" +
+        rows.map(r => "<tr>" + r.map(c => "<td>" + c + "</td>").join("") + "</tr>").join("") + "</tbody></table>");
+      continue;
+    }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { closeList(); closeQuote(); out.push("<h" + h[1].length + ">" + inlineMd(h[2]) + "</h" + h[1].length + ">"); i++; continue; }
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { closeList(); closeQuote(); out.push("<hr>"); i++; continue; }
+    const q = line.match(/^&gt;\s?(.*)$/);
+    if (q) { closeList(); if (!inQuote) { out.push("<blockquote>"); inQuote = true; } out.push("<p>" + inlineMd(q[1]) + "</p>"); i++; continue; }
+    closeQuote();
+    const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    const ol = line.match(/^\s*\d+[.、)]\s+(.*)$/);
+    if (ul || ol) {
+      const want = ul ? "ul" : "ol";
+      if (listType !== want) { closeList(); out.push(want === "ul" ? "<ul>" : "<ol>"); listType = want; }
+      out.push("<li>" + inlineMd((ul || ol)[1]) + "</li>"); i++; continue;
+    }
+    closeList();
+    if (line.trim() === "") { i++; continue; }
+    out.push("<p>" + inlineMd(line) + "</p>"); i++;
+  }
+  closeList(); closeQuote();
+  return out.join("");
+}
+
+// ---------- 气泡构造 ----------
+function addUserMsg(text) {
+  const div = document.createElement("div");
+  div.className = "msg user";
+  const av = document.createElement("div"); av.className = "avatar"; av.textContent = "🙋";
+  const bub = document.createElement("div"); bub.className = "bubble"; bub.textContent = text;
+  div.append(av, bub); messagesEl.appendChild(div); scrollBottom();
+}
+function addBotMsg() {
+  const div = document.createElement("div");
+  div.className = "msg bot";
+  const av = document.createElement("div"); av.className = "avatar"; av.textContent = "🐱";
+  const bub = document.createElement("div"); bub.className = "bubble";
+  const badges = document.createElement("div"); badges.className = "badges"; badges.style.display = "none";
+  const text = document.createElement("div"); text.className = "md";
+  text.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+  bub.append(badges, text);
+  div.append(av, bub); messagesEl.appendChild(div); scrollBottom();
+  return { badges, text };
+}
+function addBadge(slot, name) {
+  slot.badges.style.display = "flex";
+  const b = document.createElement("span");
+  b.className = "badge"; b.textContent = "🔧 调用了 " + name;
+  slot.badges.appendChild(b); scrollBottom();
+}
+function scrollBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
+
+// ---------- SSE 对话 ----------
+let busy = false;
+async function streamChat(message) {
+  const slot = addBotMsg();
+  let raw = "", gotDelta = false, failed = false;
+  try {
+    const resp = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: getUserId(), message, conversation_id: getConversationId() }),
+    });
+    if (!resp.ok || !resp.body) {
+      let detail = "请求失败(" + resp.status + ")";
+      try { const j = await resp.json(); if (j.detail) detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch (_) {}
+      throw new Error(detail);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buf = "", pendingEvent = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx).replace(/\r$/, ""); buf = buf.slice(idx + 1);
+        if (line.startsWith("event: ")) { pendingEvent = line.slice(7).trim(); continue; }
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6);
+        if (payload === "[DONE]") { pendingEvent = null; continue; }
+        let frame; try { frame = JSON.parse(payload); } catch (_) { continue; }
+        if (pendingEvent === "error") {
+          failed = true;
+          slot.text.innerHTML = '<span class="err">' + escapeHtml(frame.message || "服务出错,请稍后重试") + "</span>";
+          pendingEvent = null; scrollBottom(); continue;
+        }
+        pendingEvent = null;
+        if (frame.event === "tool") { addBadge(slot, frame.name); continue; }
+        if (frame.event === "done") { if (frame.conversation_id != null) setConversationId(frame.conversation_id); continue; }
+        if (typeof frame.delta === "string") {
+          raw += frame.delta; gotDelta = true;
+          slot.text.innerHTML = renderMarkdown(raw); scrollBottom();
+        }
+      }
+    }
+    if (!gotDelta && !failed) {
+      slot.text.innerHTML = '<span class="err">未收到回答,请重试</span>';
+    }
+  } catch (e) {
+    slot.text.innerHTML = '<span class="err">' + escapeHtml(e.message || "网络错误,请稍后重试") + "</span>";
+  }
+  scrollBottom();
+}
+
+async function send() {
+  const message = inputEl.value.trim();
+  if (!message || busy) return;
+  busy = true; sendEl.disabled = true;
+  inputEl.value = "";
+  addUserMsg(message);
+  await streamChat(message);
+  busy = false; sendEl.disabled = false;
+  inputEl.focus();
+}
+
+sendEl.addEventListener("click", send);
+inputEl.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+document.getElementById("new-chat").addEventListener("click", () => {
+  clearConversationId();
+  messagesEl.innerHTML = "";
+  inputEl.focus();
+});
+
+// 开场白(纯前端,不落后端)
+(function greet() {
+  const slot = addBotMsg();
+  slot.text.innerHTML = renderMarkdown("你好呀,我是「喵喵优选」的智能客服 **小喵** 🐱\n订单、物流、商品、售后问题都可以问我,例如:\n- 订单 1001 的物流到哪了\n- 退货政策是什么");
+})();
+</script>
+</body>
+</html>

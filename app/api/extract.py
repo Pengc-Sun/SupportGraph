@@ -11,8 +11,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 def get_extractor() -> Runnable:
-    model = get_chat_model()
-    return EXTRACT_PROMPT | model.with_structured_output(AfterSalesTicket)
+    # DeepSeek 官方 deepseek-flash 默认 thinking,不支持强制 tool_choice / json_schema;
+    # 提取走 function_calling 需关 thinking。agent 聊天路径用 tool_choice=auto 不受影响。
+    model = get_chat_model(extra_body={"thinking": {"type": "disabled"}})
+    return EXTRACT_PROMPT | model.with_structured_output(AfterSalesTicket, method="function_calling")
 
 @router.post("/api/extract", response_model=AfterSalesTicket)
 async def extract(

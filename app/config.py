@@ -8,5 +8,7 @@ class Settings(BaseSettings):
     chat_base_url: str
     chat_api_key: str
     token_budget: int = 2000
+    database_url: str = "mysql+asyncmy://root:root@localhost:3306/mewhelp"
+    test_database_url: str = "mysql+asyncmy://root:root@localhost:3306/mewhelp_test"
 
 settings = Settings()

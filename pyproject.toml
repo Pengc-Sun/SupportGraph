@@ -3,10 +3,13 @@ name = "mewhelp"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "asyncmy>=0.2.9",
+    "cryptography>=50.0.2",
     "fastapi>=0.163.1",
     "langchain>=1.5.0",
     "langchain-openai>=1.8.0",
     "pydantic-settings>=2.16.3",
+    "sqlalchemy[asyncio]>=2.0.0",
     "uvicorn[standard]>=0.54.0",
 ]
 

@@ -12,7 +12,7 @@ def main() -> int:
     samples = json.loads(SAMPLES.read_text(encoding="utf-8"))
     failures = 0
     for i, s in enumerate(samples, 1):
-        r = httpx.post(f"{BASE}/api/extract", json={"text": s["text"]}, timeout=60)
+        r = httpx.post(f"{BASE}/api/extract", json={"text": s["text"]}, timeout=60, trust_env=False)
         r.raise_for_status()
         got = r.json()
         exp = s["expected"]
