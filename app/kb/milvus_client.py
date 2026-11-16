@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pymilvus import CollectionSchema, DataType, FieldSchema, MilvusClient
 
 from app.config import settings
@@ -7,7 +9,10 @@ DIM = 1024
 
 
 def get_client(uri: str | None = None) -> MilvusClient:
-    return MilvusClient(uri=uri or settings.milvus_uri)
+    uri = uri or settings.milvus_uri
+    if "://" not in uri:  # 本地文件 URI:Milvus Lite 不自建父目录,先确保存在
+        Path(uri).parent.mkdir(parents=True, exist_ok=True)
+    return MilvusClient(uri=uri)
 
 
 def ensure_collection(client: MilvusClient) -> None:

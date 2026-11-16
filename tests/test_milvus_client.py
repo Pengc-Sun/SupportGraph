@@ -18,6 +18,13 @@ def _vec(seed: float) -> list[float]:
     return v
 
 
+def test_get_client_creates_missing_parent_dirs(tmp_path):
+    # I1 回归:Milvus Lite 不会自建父目录,get_client 须先 mkdir(parents=True)
+    c = mc.get_client(uri=str(tmp_path / "nested" / "dir" / "t.db"))
+    mc.ensure_collection(c)
+    assert c.has_collection(mc.COLLECTION)
+
+
 def test_upsert_then_search_returns_fields(client):
     mc.upsert_vectors(client, [
         {"id": 1, "vector": _vec(1.0), "question": "运费怎么算", "answer": "满99包邮"},
