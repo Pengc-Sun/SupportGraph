@@ -16,7 +16,7 @@ async def test_stream_with_tools_emits_tool_delta_done(db_session_factory, db_cl
     deltas = [e for e in events if e["type"] == "delta"]
     # 事件序列:tool(query_logistics)→ 若干 delta → done
     assert types == ["tool"] + ["delta"] * len(deltas) + ["done"]
-    assert len(deltas) >= 1
+    assert len(deltas) > 1                              # FakeModel 吐 3 token,锁真逐 token
     assert events[0]["name"] == "query_logistics"
     assert "".join(d["text"] for d in deltas) == "您的订单 1001 正在运输中。"
     cid = events[-1]["conversation_id"]

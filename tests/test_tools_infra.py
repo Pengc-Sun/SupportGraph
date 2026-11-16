@@ -10,6 +10,7 @@ async def test_execute_unknown_tool_returns_error_run():
     run = await infra.execute_tool_call({"name": "nope", "args": {}, "id": "c1"}, conversation_id=1)
     assert run.ok is False and run.tool_call_id == "c1"
     assert "未知工具" in run.tool_message.content
+    assert run.tool_message.status == "error"
 
 async def test_timeout_then_error(monkeypatch):
     async def slow(_args):
@@ -19,6 +20,7 @@ async def test_timeout_then_error(monkeypatch):
     run = await infra.execute_tool_call({"name": "query_order", "args": {"order_id": "1"}, "id": "c1"},
                                         conversation_id=1, timeout=0.05, max_retries=1)
     assert run.ok is False and "失败" in run.tool_message.content
+    assert run.tool_message.status == "error"
 
 async def test_retry_succeeds_on_second_attempt(monkeypatch):
     calls = {"n": 0}
@@ -43,3 +45,4 @@ async def test_create_ticket_not_retried(monkeypatch):
     run = await infra.execute_tool_call({"name": "create_ticket", "args": {"description": "x", "ticket_type": "售后"}, "id": "c1"},
                                         conversation_id=1, timeout=1.0, max_retries=2)
     assert run.ok is False and calls["n"] == 1      # 写类工具不重试
+    assert run.tool_message.status == "error"
