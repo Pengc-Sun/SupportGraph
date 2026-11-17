@@ -1,4 +1,4 @@
-.PHONY: dev test eval eval-agent seed kb-build kb-vectorize kb-mine eval-retrieval seed-conv eval-mining kb-preview kb-reset
+.PHONY: dev test eval eval-agent seed kb-build kb-vectorize kb-mine eval-retrieval seed-conv eval-mining kb-preview kb-reset milvus-up milvus-down smoke-rag eval-rag
 
 dev:
 	./scripts/dev.sh
@@ -38,3 +38,17 @@ kb-preview:
 
 kb-reset:
 	PYTHONPATH=. uv run python scripts/reset_kb.py
+
+milvus-up:
+	docker-compose up -d etcd minio milvus-standalone
+	@echo "等待 Milvus 就绪(healthz)..."; \
+	for i in $$(seq 1 60); do \
+	  curl -sf http://localhost:9091/healthz >/dev/null 2>&1 && echo "Milvus OK" && exit 0; \
+	  sleep 3; done; echo "Milvus 未就绪" && exit 1
+
+milvus-down:
+	docker-compose stop etcd minio milvus-standalone
+
+smoke-rag:
+	PYTHONPATH=. uv run python scripts/smoke_milvus_bm25.py
+	PYTHONPATH=. uv run python scripts/smoke_rerank.py
