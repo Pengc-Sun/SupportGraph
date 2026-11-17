@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 
 from app.kb import dualwrite, milvus_client
@@ -6,16 +8,21 @@ from app.db import repository
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
+URI = "http://localhost:19530"
+
 
 def _chunk(q, a):
     return Chunk(category="c", questions=q, answer=a, section_path="c / " + q, content_type="policy")
 
 
 @pytest.fixture()
-def milvus(tmp_path):
-    c = milvus_client.get_client(uri=str(tmp_path / "t.db"))
-    milvus_client.ensure_collection(c)
-    return c
+def milvus():
+    # ch04 迁移:Lite → 真实 Standalone(BM25 Function 不支持 Lite),唯一集合名 + teardown drop
+    c = milvus_client.get_client(uri=URI)
+    name = f"test_kb_{uuid.uuid4().hex[:8]}"
+    milvus_client.ensure_collection(c, collection=name)
+    yield c, name
+    milvus_client.drop(c, name)
 
 
 async def test_write_pending_links_neighbors(db_session_factory, db_clean):
@@ -28,6 +35,7 @@ async def test_write_pending_links_neighbors(db_session_factory, db_clean):
 
 
 async def test_vectorize_resumes_after_crash(db_session_factory, db_clean, milvus, monkeypatch):
+    c, name = milvus
     await dualwrite.write_pending([_chunk(f"q{i}", f"a{i}") for i in range(4)])
 
     # 第一趟:embed 在第 2 批抛错(batch_size=2 → 前 2 条 done,后 2 条仍 pending)
@@ -41,7 +49,7 @@ async def test_vectorize_resumes_after_crash(db_session_factory, db_clean, milvu
 
     monkeypatch.setattr("app.kb.dualwrite.embeddings.embed_texts", flaky_embed)
     with pytest.raises(RuntimeError):
-        await dualwrite.vectorize_pending(milvus, batch_size=2)
+        await dualwrite.vectorize_pending(c, batch_size=2, collection=name)
     assert await repository.count_chunks_by_status("done") == 2
     assert await repository.count_chunks_by_status("pending") == 2
 
@@ -50,15 +58,16 @@ async def test_vectorize_resumes_after_crash(db_session_factory, db_clean, milvu
         return [[9.0, 0.0, 1.0] + [0.0] * (milvus_client.DIM - 3) for _ in texts]
 
     monkeypatch.setattr("app.kb.dualwrite.embeddings.embed_texts", ok_embed)
-    done_now = await dualwrite.vectorize_pending(milvus, batch_size=2)
+    done_now = await dualwrite.vectorize_pending(c, batch_size=2, collection=name)
     assert done_now == 2
     assert await repository.count_chunks_by_status("pending") == 0
     assert await repository.count_chunks_by_status("done") == 4
-    assert milvus_client.count(milvus) == 4  # 无重无漏
+    assert milvus_client.count(c, collection=name) == 4  # 无重无漏
 
 
 async def test_vectorize_rejects_vector_count_mismatch(db_session_factory, db_clean, milvus, monkeypatch):
     """嵌入返回数与批次块数不符 → 立刻抛错;不许 zip 静默截断把没向量的块标 done。"""
+    c, name = milvus
     await dualwrite.write_pending([_chunk("q1", "a1"), _chunk("q2", "a2")])
 
     async def short_embed(texts):
@@ -67,7 +76,7 @@ async def test_vectorize_rejects_vector_count_mismatch(db_session_factory, db_cl
 
     monkeypatch.setattr("app.kb.dualwrite.embeddings.embed_texts", short_embed)
     with pytest.raises(RuntimeError):
-        await dualwrite.vectorize_pending(milvus, batch_size=8)
+        await dualwrite.vectorize_pending(c, batch_size=8, collection=name)
     assert await repository.count_chunks_by_status("pending") == 2
     assert await repository.count_chunks_by_status("done") == 0
-    assert milvus_client.count(milvus) == 0  # 抛错在 upsert 之前,一条都没写
+    assert milvus_client.count(c, collection=name) == 0  # 抛错在 upsert 之前,一条都没写

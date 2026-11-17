@@ -1,3 +1,6 @@
+import time
+import uuid
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -6,6 +9,8 @@ from app.kb import chunking, documents, milvus_client
 from app.main import app
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
+
+URI = "http://localhost:19530"
 
 MD = """# 售后知识
 
@@ -30,11 +35,23 @@ def client():
 
 
 @pytest.fixture()
-def milvus(tmp_path, monkeypatch):
-    c = milvus_client.get_client(uri=str(tmp_path / "t.db"))
-    milvus_client.ensure_collection(c)
+def milvus(monkeypatch):
+    # ch04 迁移:Lite → 真实 Standalone(BM25 Function 不支持 Lite),唯一集合名 + teardown drop。
+    # app 代码走默认集合:patch COLLECTION + 包装默认参数在 def 时绑定的函数,
+    # 强制所有读写落在临时集合,不污染共享 knowledge。
+    c = milvus_client.get_client(uri=URI)
+    name = f"test_kb_{uuid.uuid4().hex[:8]}"
+    milvus_client.ensure_collection(c, collection=name)
     monkeypatch.setattr(milvus_client, "get_client", lambda uri=None: c)
-    return c
+    monkeypatch.setattr(milvus_client, "COLLECTION", name)
+    for fn in ("ensure_collection", "upsert_vectors", "flush", "count", "dense_search"):
+        orig = getattr(milvus_client, fn)
+        def wrap(*args, _orig=orig, **kwargs):
+            kwargs["collection"] = name
+            return _orig(*args, **kwargs)
+        monkeypatch.setattr(milvus_client, fn, wrap)
+    yield c
+    milvus_client.drop(c, name)
 
 
 @pytest.fixture()
@@ -223,9 +240,11 @@ async def test_overview_consistent_true_then_false(client, db_session_factory, d
         assert r.json()["consistent"] is True
         # Milvus 多出一条 → done 数对不上 → False(真·对不上)
         milvus_client.upsert_vectors(milvus, [{
-            "id": 99999, "vector": [1.0, 0.0, 1.0] + [0.0] * (milvus_client.DIM - 3),
-            "question": "幽灵", "answer": "多出来的",
+            "id": 99999, "dense": [1.0, 0.0, 1.0] + [0.0] * (milvus_client.DIM - 3),
+            "text": "幽灵 多出来的", "question": "幽灵", "answer": "多出来的",
+            "section_path": "", "content_type": "", "category": "",
         }])
+        milvus_client.flush(milvus)
         r2 = await c.get("/api/kb/overview")
         assert r2.json()["consistent"] is False
         assert r2.json()["mysql"]["done"] == 2 and r2.json()["milvus_count"] == 3
@@ -249,9 +268,16 @@ async def test_search_endpoint(client, milvus, monkeypatch):
     v_hit = [1.0, 0.0, 1.0] + [0.0] * (milvus_client.DIM - 3)
     v_other = [0.0, 1.0, 0.0] + [0.0] * (milvus_client.DIM - 3)
     milvus_client.upsert_vectors(milvus, [
-        {"id": 1, "vector": v_hit, "question": "运费怎么算", "answer": "满99包邮"},
-        {"id": 2, "vector": v_other, "question": "发货时效", "answer": "48小时"},
+        {"id": 1, "dense": v_hit, "text": "运费 包邮 满99",
+         "question": "运费怎么算", "answer": "满99包邮",
+         "section_path": "运费政策", "content_type": "faq", "category": "运费"},
+        {"id": 2, "dense": v_other, "text": "发货 时效 48小时",
+         "question": "发货时效", "answer": "48小时",
+         "section_path": "发货政策", "content_type": "faq", "category": "发货"},
     ])
+    milvus_client.flush(milvus)  # 新数据须 flush 才可被检索
+    milvus.load_collection(milvus_client.COLLECTION)
+    time.sleep(2)
     async def fake_query(q):
         return v_hit
     monkeypatch.setattr("app.core.retrieval.embeddings.embed_query", fake_query)
@@ -377,9 +403,11 @@ async def test_reset_kb_clears_mysql_and_milvus(db_session_factory, db_clean, mi
     await repository.insert_knowledge_chunk("c", "q", "a")
     await repository.insert_staging("b1", None, "q", "a")
     milvus_client.upsert_vectors(milvus, [{
-        "id": 1, "vector": [1.0] + [0.0] * (milvus_client.DIM - 1),
-        "question": "q", "answer": "a",
+        "id": 1, "dense": [1.0] + [0.0] * (milvus_client.DIM - 1),
+        "text": "问题 答案", "question": "q", "answer": "a",
+        "section_path": "", "content_type": "", "category": "",
     }])
+    milvus_client.flush(milvus)
     await reset_kb.main()
     out = capsys.readouterr().out
     assert "1 → 0" in out  # before/after 计数

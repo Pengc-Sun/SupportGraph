@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -8,6 +10,8 @@ from app.main import app
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
+URI = "http://localhost:19530"
+
 
 @pytest.fixture()
 def client():
@@ -15,11 +19,21 @@ def client():
 
 
 @pytest.fixture()
-def milvus(tmp_path, monkeypatch):
-    c = milvus_client.get_client(uri=str(tmp_path / "t.db"))
-    milvus_client.ensure_collection(c)
+def milvus(monkeypatch):
+    # ch04 迁移:Lite → 真实 Standalone(BM25 Function 不支持 Lite),唯一集合名 + teardown drop。
+    # admin 读数走默认集合:patch get_client + 包装 count,强制落在临时集合,不碰共享 knowledge。
+    c = milvus_client.get_client(uri=URI)
+    name = f"test_kb_{uuid.uuid4().hex[:8]}"
+    milvus_client.ensure_collection(c, collection=name)
     monkeypatch.setattr(milvus_client, "get_client", lambda uri=None: c)
-    return c
+    monkeypatch.setattr(milvus_client, "COLLECTION", name)
+    orig_count = milvus_client.count
+    def wrap_count(*args, _orig=orig_count, **kwargs):
+        kwargs["collection"] = name
+        return _orig(*args, **kwargs)
+    monkeypatch.setattr(milvus_client, "count", wrap_count)
+    yield c
+    milvus_client.drop(c, name)
 
 
 def _kb_card(cards):
@@ -31,9 +45,11 @@ async def test_admin_overview_kb_card_ok(client, db_session_factory, db_clean, m
     await repository.insert_knowledge_chunk("c", "q2", "a2")
     await repository.mark_chunk_vectorized(id1, str(id1))
     milvus_client.upsert_vectors(milvus, [{
-        "id": id1, "vector": [1.0] + [0.0] * (milvus_client.DIM - 1),
-        "question": "q1", "answer": "a1",
-    }])
+        "id": id1, "dense": [1.0] + [0.0] * (milvus_client.DIM - 1),
+        "text": "c\nq1\na1", "question": "q1", "answer": "a1",
+        "section_path": "", "content_type": "", "category": "c",
+    }], collection=milvus_client.COLLECTION)
+    milvus_client.flush(milvus, collection=milvus_client.COLLECTION)  # flush 后 count 才可见
     async with client as c:
         r = await c.get("/api/admin/overview")
     assert r.status_code == 200
