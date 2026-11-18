@@ -1,12 +1,24 @@
 """T16 评估页 API:只读产物 json,不重算;缺失/写坏按「没跑过」,半份结果照样端出来。
-不碰 MySQL/Milvus(admin 卡的 kb 探针用替身隔离)。"""
+不碰 MySQL/Milvus(admin 卡的 kb 探针与台账回查都用替身隔离)。"""
 import json
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.api import admin, rageval
+from app.db import repository
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _faith_db_off(monkeypatch):
+    """overview 的幻觉率块会回查台账;本文件不碰 MySQL,替身给空账。"""
+    async def status_map():
+        return {}
+    async def counts():
+        return {"未解决": 0, "已解决": 0, "无需解决": 0}
+    monkeypatch.setattr(repository, "faith_case_status_map", status_map)
+    monkeypatch.setattr(repository, "faith_case_counts", counts)
 
 
 @pytest.fixture()
@@ -62,6 +74,7 @@ async def test_missing_report_is_state_not_error(client, report_path):
     for k in ("meta", "retrieval", "evidence_coverage", "generation", "best"):
         assert d[k] is None
     assert d["generation_done"] is False
+    assert d["hallucination"] == {"judge_rate": None, "confirmed_rate": None, "ledger": None}
 
 
 # ---- 产物在:一字不差端出去,API 不重算 ----
@@ -100,6 +113,28 @@ async def test_best_none_safe(client, report_path):
     async with client as c:
         d = (await c.get("/api/rag-eval/overview")).json()
     assert d["present"] is True and d["best"] is None
+
+
+async def test_best_ignores_non_numeric_mrr(client, report_path):
+    # 脏值(字符串 mrr)不参与比较,更不该把整个 overview 炸成 500
+    report = _report()
+    report["retrieval"]["hybrid_rerank"]["overall"]["mrr"] = "0.99"
+    _write(report_path, report)
+    async with client as c:
+        r = await c.get("/api/rag-eval/overview")
+    assert r.status_code == 200
+    assert r.json()["best"] == "hybrid"
+
+
+# ---- 幻觉率块:判出率来自本轮报告,台账空时确认率 0、累计全 0 ----
+
+async def test_overview_hallucination_block(client, report_path):
+    _write(report_path, _report())
+    async with client as c:
+        h = (await c.get("/api/rag-eval/overview")).json()["hallucination"]
+    assert h["judge_rate"] == pytest.approx(1 / 80)
+    assert h["confirmed_rate"] == 0.0
+    assert h["ledger"] == {"total": 0, "unresolved": 0, "resolved": 0, "dismissed": 0}
 
 
 # ---- 半份结果:generation 为 null,检索段照样端出去 ----

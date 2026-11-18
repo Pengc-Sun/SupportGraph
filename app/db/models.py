@@ -114,3 +114,28 @@ class LowConfidenceQuestion(Base):
     )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+# 编造个案跨轮台账:报告重跑即覆盖,个案与处置状态跨轮留存(权威 DDL 见 sql/ch04-ddl.sql)
+class FaithCase(Base):
+    __tablename__ = "faith_cases"
+    __mapper_args__ = {"eager_defaults": True}
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    eval_id: Mapped[str] = mapped_column(String(64), unique=True)   # 一题一行
+    bucket: Mapped[str] = mapped_column(String(16))
+    query: Mapped[str] = mapped_column(Text)
+    strategy: Mapped[str] = mapped_column(String(32))
+    answer: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    citations: Mapped[list | None] = mapped_column(JSON, nullable=True)   # Top-K 证据全集快照,[n] 即序号
+    judge_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(
+        Enum("未解决", "已解决", "无需解决"), server_default="未解决"
+    )
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)   # 处置说明,应用层校验必填
+    seen_count: Mapped[int] = mapped_column(Integer, server_default="1")
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

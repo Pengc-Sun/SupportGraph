@@ -4,6 +4,7 @@
 产物:data/ch04/reports/rag_eval.{txt,json}——txt 是运行日志给人读,json 给评估页读。"""
 import asyncio
 import json
+import logging
 import pathlib
 import sys
 from datetime import datetime
@@ -23,6 +24,8 @@ GRADED_BUCKETS = ["A_policy", "B_model", "C_colloquial", "E_multi"]
 K = 10          # 检索深度
 RECALL_K = 5    # 召回口径深度(与 K 分开配,同一批 top-10 命中里截前 5)
 RETR_CONCURRENCY, GEN_CONCURRENCY, CALL_TIMEOUT = 8, 3, 45.0   # 生成压低并发 + 每调用超时
+
+logger = logging.getLogger(__name__)
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 EVAL_FILE = _ROOT / "tests/data/eval_ch04.jsonl"
@@ -347,6 +350,22 @@ async def _generation(samples, HITS):
 
 # ---------- 报告 ----------
 
+async def _write_ledger(generation_d, meta):
+    """台账是附加的管理视图:写库失败只打一行日志,不影响本轮报告落盘。"""
+    if generation_d is None:
+        return
+    try:
+        from app.db import repository   # 懒 import:脚本 import 阶段不碰 DB
+        cases = generation_d.get("faithfulness_cases") or []
+        recurred = 0
+        for c in cases:
+            out = await repository.upsert_faith_case(c, judge_model=meta.get("chat_model"))
+            recurred += bool(out["recurred"])
+        _log(f"台账:本轮判出 {len(cases)} 例,复发 {recurred} 例")
+    except Exception as e:
+        logger.warning("faith_cases 台账写入失败(报告照常落盘):%s", e)
+
+
 def _write_report(retrieval_d, coverage_d, generation_d, meta):
     report = {"meta": meta, "retrieval": retrieval_d,
               "evidence_coverage": coverage_d, "generation": generation_d}
@@ -391,6 +410,7 @@ async def main():
         _errs.append(f"generation: {type(e).__name__}")
         _log(f"[生成段未完成] {e}")   # 上游恢复后重跑补全
     meta = _build_meta(samples)
+    await _write_ledger(generation_d, meta)   # 先落台账(失败只打日志),汇总行随 txt 落盘
     _log(f"报告落盘:{_OUT_TXT} / {_OUT_JSON}")
     _write_report(retrieval_d, coverage_d, generation_d, meta)
     return 0

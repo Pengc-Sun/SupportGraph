@@ -67,6 +67,28 @@ details.cases summary { cursor: pointer; font-size: 13px; color: var(--sub); }
 .empty-state { text-align: center; padding: 46px 20px; }
 .empty-state .big { font-size: 40px; }
 .empty-state h3 { font-size: 17px; margin: 10px 0 6px; }
+
+/* 编造个案台账:两率 / 状态页签 / 证据快照 / 处置输入行 */
+.fc-rates { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
+.fc-rate { background: #fafbfc; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; min-width: 210px; }
+.fc-rate .k-label { font-size: 12px; color: var(--sub); }
+.fc-rate .k-num { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0; }
+.fc-ledger-line { margin-top: 10px; font-size: 13px; }
+.fc-pager { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 12.5px; color: var(--sub); }
+.fc-actions { display: flex; gap: 8px; margin-top: 8px; }
+.fc-form { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+.fc-form[hidden] { display: none; }
+.fc-form input { flex: 1; min-width: 0; }
+.fc-form .fc-tip { font-size: 12px; color: var(--sub); flex: none; }
+.fc-resolution { margin-top: 8px; font-size: 12.5px; background: var(--ok-soft); border: 1px solid #b7ebc6;
+  border-radius: 8px; padding: 6px 10px; }
+details.evidence { margin-top: 8px; }
+details.evidence summary { cursor: pointer; font-size: 12.5px; color: var(--sub); }
+.ev-item { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin-top: 6px; font-size: 12.5px; }
+.ev-item.cited { border-color: var(--brand); background: var(--brand-soft); }
+.ev-item .ev-q { font-weight: 600; margin-top: 4px; }
+.ev-item pre { white-space: pre-wrap; word-break: break-all; font-family: inherit; font-size: 12px;
+  background: rgba(255,255,255,.65); border-radius: 6px; padding: 6px 8px; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -83,6 +105,9 @@ details.cases summary { cursor: pointer; font-size: 13px; color: var(--sub); }
 
 <main>
   <div id="report"><div class="panel"><span class="muted">加载中…</span></div></div>
+
+  <!-- 编造个案台账:跨轮累计(DB),独立于本轮报告在不在 -->
+  <section class="panel" id="ledger-panel"><span class="muted">加载中…</span></section>
 
   <!-- 就地重跑:共用白名单作业运行器,分钟级重活二次确认 -->
   <section class="panel" id="rerun">
@@ -266,6 +291,16 @@ function generationPanel() {
 }
 
 // ---------- 完整数据 ----------
+// 编造个案卡片:报告 details 与台账共用同一套结构(同一种东西长一个样);extra 是台账专属附加件
+function fcaseCard(cs, extra) {
+  extra = extra || {};
+  return '<div class="case-item"><div>' + A.pill(cs.bucket || "—", "mute") + " " + A.pill(cs.id || "—", "info") + (extra.badges || "") + "</div>"
+    + '<div class="c-q">' + A.esc(cs.query) + "</div>"
+    + "<pre>" + A.esc(cs.answer) + "</pre>"
+    + '<div class="why">裁判理由:' + A.esc(cs.reason || "(未给理由)") + "</div>"
+    + (extra.tail || "") + "</div>";
+}
+
 function tablePanel() {
   const r = DATA.retrieval || {}, c = DATA.evidence_coverage || {};
   const g = DATA.generation_done ? (DATA.generation || {}) : null;
@@ -280,11 +315,7 @@ function tablePanel() {
       + '<td class="num">' + A.esc(g ? fmt3(ans) : "未完成") + "</td></tr>";
   }).join("");
   const cases = (g && g.faithfulness_cases) || [];
-  const caseHtml = cases.map(cs =>
-    '<div class="case-item"><div>' + A.pill(cs.bucket || "—", "mute") + " " + A.pill(cs.id || "—", "info") + "</div>"
-    + '<div class="c-q">' + A.esc(cs.query) + "</div>"
-    + "<pre>" + A.esc(cs.answer) + "</pre>"
-    + '<div class="why">裁判理由:' + A.esc(cs.reason || "(未给理由)") + "</div></div>").join("");
+  const caseHtml = cases.map(cs => fcaseCard(cs)).join("");
   return '<section class="panel"><h2>④ 完整数据</h2>'
     + '<div class="p-sub">分桶 MRR 与两项覆盖度汇总;总体 MRR 最佳那一行带底色。数与上面每张图同源。</div>'
     + '<table class="tb"><thead><tr><th>策略</th><th>A 政策 MRR</th><th>B 型号 MRR</th><th>C 口语 MRR</th><th>E 跨文档 MRR</th>'
@@ -292,6 +323,137 @@ function tablePanel() {
     + '<details class="cases"><summary>编造个案 ' + cases.length + " 例(点开逐条看问题、生成答案、裁判理由)</summary>"
     + (cases.length ? caseHtml : '<div class="muted" style="margin-top:8px">本轮没有判出的编造个案。</div>')
     + "</details></section>";
+}
+
+// ---------- 编造个案台账(跨轮 DB,独立于本轮报告) ----------
+const FC = { status: "", page: 1, size: 5, data: null, err: null };
+const FC_STATUSES = ["未解决", "已解决", "无需解决"];
+const fcStatusKind = st => st === "未解决" ? "warn" : st === "已解决" ? "ok" : "mute";
+
+async function loadFaithCases() {
+  const q = "/api/rag-eval/faith-cases?page=" + FC.page + "&size=" + FC.size
+    + (FC.status ? "&status=" + encodeURIComponent(FC.status) : "");
+  try { FC.data = await A.api(q); FC.err = null; }
+  catch (e) { FC.err = e.message; }
+  renderLedger();
+}
+
+// 证据快照折叠块:全量带出,答案里出现 [n] 的那几条高亮标「答案引用」
+function fcEvidence(it) {
+  const cits = it.citations || [];
+  if (!cits.length) return '<div class="muted" style="margin-top:6px">该个案没有证据快照。</div>';
+  const used = new Set();
+  const re = /\[(\d+)\]/g;
+  let m;
+  while ((m = re.exec(it.answer || "")) !== null) used.add(Number(m[1]));
+  const items = cits.map(c => {
+    const on = used.has(Number(c.n));
+    return '<div class="ev-item' + (on ? " cited" : "") + '">'
+      + "<div>" + A.pill("[" + c.n + "]", on ? "info" : "mute") + (on ? " " + A.pill("答案引用", "ok") : "")
+      + ' <span class="muted">' + A.esc(c.section_path || "") + "</span></div>"
+      + '<div class="ev-q">' + A.esc(c.question || "") + "</div>"
+      + "<pre>" + A.esc(c.answer || "") + "</pre></div>";
+  }).join("");
+  const hit = cits.filter(c => used.has(Number(c.n))).length;
+  return '<details class="evidence"><summary>证据快照 ' + cits.length + " 条(答案引用 " + hit + " 条,点开对照原文)</summary>" + items + "</details>";
+}
+
+function fcCard(it) {
+  const badges = " " + A.pill(it.status, fcStatusKind(it.status)) + " " + A.pill("判出 " + it.seen_count + " 次", "mute");
+  let tail = fcEvidence(it);
+  if (it.resolution) {
+    tail += '<div class="fc-resolution"><b>' + (it.status === "已解决" ? "怎么解决的" : "为什么不用改") + ":</b>" + A.esc(it.resolution)
+      + (it.resolved_at ? ' <span class="muted">(' + A.esc(A.fmtTime(it.resolved_at)) + ")</span>" : "") + "</div>";
+  }
+  tail += '<div class="fc-actions" data-id="' + it.id + '">'
+    + (it.status === "未解决"
+      ? '<button class="btn mini" data-act="已解决">已解决</button><button class="btn mini" data-act="无需解决">无需解决</button>'
+      : '<button class="btn mini" data-act="未解决">退回未解决</button>')
+    + "</div>"
+    + '<div class="fc-form" data-id="' + it.id + '" hidden>'
+    + '<span class="fc-tip"></span>'
+    + '<input type="text" class="fc-res" maxlength="500">'
+    + '<button class="btn mini primary fc-submit" disabled>提交</button>'
+    + '<button class="btn mini fc-cancel">取消</button>'
+    + "</div>";
+  return fcaseCard({ id: it.eval_id, bucket: it.bucket, query: it.query, answer: it.answer, reason: it.reason },
+                   { badges: badges, tail: tail });
+}
+
+function renderLedger() {
+  const box = $("ledger-panel");
+  const h = (DATA && DATA.hallucination) || {};
+  const rate = (label, v, sub) => '<div class="fc-rate"><div class="k-label">' + A.esc(label) + '</div><div class="k-num">'
+    + (v == null ? A.pill("未完成", "warn") : A.esc(pct(v))) + '</div><div class="k-label">' + A.esc(sub) + "</div></div>";
+  let html = "<h2>⑤ 编造个案台账</h2>"
+    + '<div class="p-sub">裁判判出的编造个案跨轮累计、一题一行;已处置过的再判出来自动退回「未解决」。两率只算本轮(分子=本轮报告的题号),台账累计单独报。</div>'
+    + '<div class="fc-rates">'
+    + rate("本轮裁判判出率", h.judge_rate, "本轮判出个案 ÷ 本轮题数")
+    + rate("本轮人工确认幻觉率", h.confirmed_rate, "本轮个案中标「已解决」÷ 本轮题数")
+    + "</div>";
+  const led = h.ledger;
+  html += '<div class="fc-ledger-line">' + (led
+    ? "台账累计:<b>" + led.total + "</b> 例 · 未解决 <b>" + led.unresolved + "</b> · 已解决 <b>" + led.resolved + "</b> · 无需解决 <b>" + led.dismissed + "</b>"
+    : A.pill("台账累计不可用(报告未跑或 DB 读不到)", "warn")) + "</div>";
+  if (FC.err) {
+    box.innerHTML = html + '<div class="err-text" style="margin-top:10px">台账读取失败:' + A.esc(FC.err) + "</div>";
+    return;
+  }
+  if (!FC.data) { box.innerHTML = html + '<span class="muted">加载中…</span>'; return; }
+  const counts = FC.data.counts || {};
+  const totalAll = FC_STATUSES.reduce((s, st) => s + (counts[st] || 0), 0);
+  const tabs = [["", "全部", totalAll]].concat(FC_STATUSES.map(st => [st, st, counts[st] || 0]))
+    .map(([k, lb, n]) => '<button class="chip' + (FC.status === k ? " on" : "") + '" data-fc-status="' + A.esc(k) + '">'
+      + A.esc(lb) + " " + n + "</button>").join("");
+  html += '<div class="tabs" id="fc-tabs">' + tabs + "</div>";
+  const items = FC.data.items || [];
+  html += items.length ? items.map(fcCard).join("")
+    : '<div class="muted" style="margin-top:8px">' + (FC.status ? "该状态下没有个案。" : "台账还是空的:跑一轮评估后,判出的个案会在这里跨轮累计。") + "</div>";
+  const pages = Math.max(1, Math.ceil((FC.data.total || 0) / FC.size));
+  html += '<div class="fc-pager"><button class="btn mini" id="fc-prev"' + (FC.page <= 1 ? " disabled" : "") + ">上一页</button>"
+    + "<span>第 " + FC.page + " / " + pages + " 页 · 共 " + (FC.data.total || 0) + " 例</span>"
+    + '<button class="btn mini" id="fc-next"' + (FC.page >= pages ? " disabled" : "") + ">下一页</button></div>";
+  box.innerHTML = html;
+  box.querySelectorAll("#fc-tabs .chip").forEach(ch => ch.addEventListener("click", () => {
+    FC.status = ch.dataset.fcStatus; FC.page = 1; loadFaithCases();
+  }));
+  $("fc-prev").addEventListener("click", () => { FC.page--; loadFaithCases(); });
+  $("fc-next").addEventListener("click", () => { FC.page++; loadFaithCases(); });
+  box.querySelectorAll(".fc-actions button").forEach(btn => btn.addEventListener("click", () => fcAction(btn)));
+  box.querySelectorAll(".fc-form").forEach(form => {
+    const input = form.querySelector(".fc-res");
+    const submit = form.querySelector(".fc-submit");
+    input.addEventListener("input", () => { submit.disabled = !input.value.trim(); });
+    form.querySelector(".fc-cancel").addEventListener("click", () => {
+      form.hidden = true; input.value = ""; submit.disabled = true;
+    });
+    submit.addEventListener("click", () => {
+      if (input.value.trim()) fcPost(form.dataset.id, { status: form.dataset.status, resolution: input.value });
+    });
+  });
+}
+
+// 已解决/无需解决:先在卡片里展开一行输入,填了才让提交;退回未解决直接走
+function fcAction(btn) {
+  const wrap = btn.closest(".fc-actions");
+  const id = wrap.dataset.id;
+  const act = btn.dataset.act;
+  if (act === "未解决") { fcPost(id, { status: "未解决" }); return; }
+  const form = wrap.parentElement.querySelector('.fc-form[data-id="' + id + '"]');
+  form.dataset.status = act;
+  form.querySelector(".fc-tip").textContent = act === "已解决" ? "怎么解决的:" : "为什么不用改:";
+  const input = form.querySelector(".fc-res");
+  input.placeholder = "处置说明必填,空白不能提交";
+  form.hidden = false;
+  input.focus();
+}
+
+async function fcPost(id, body) {
+  try {
+    await A.post("/api/rag-eval/faith-cases/" + id + "/status", body);
+    A.toast("处置已更新", "ok");
+  } catch (e) { A.toast("处置失败:" + e.message, "err"); return; }
+  await Promise.all([load(), loadFaithCases()]);   // 两率与台账一起刷新
 }
 
 // ---------- 汇总渲染 ----------
@@ -320,18 +482,21 @@ async function load() {
     return;
   }
   render();
+  renderLedger();   // 两率来自 overview,报告刷新后台账头部跟着刷
 }
 
-$("btn-refresh").addEventListener("click", load);
+$("btn-refresh").addEventListener("click", () => { load(); loadFaithCases(); });
 // 作业面板只挂载一次;跑完回调只刷数据区,日志尾另有缓存,重建也不丢
 A.mountJobs($("jobs-rageval"), ["eval-rag"], {
   onFinish: (name, st) => {
     load();
+    loadFaithCases();   // 重跑后台账累加,列表也要重取
     if (st.exit_code === 0) A.toast("评估跑完,报告已刷新", "ok");
     else A.toast(name + " 结束但 exit=" + st.exit_code + ",看日志尾", "warn");
   },
 });
 load();
+loadFaithCases();
 </script>
 </body>
 </html>

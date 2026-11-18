@@ -1,6 +1,7 @@
 """T13 评估脚本单测:纯确定性逻辑 + mock,不碰真实 Milvus/LLM/MySQL。"""
 import asyncio
 import json
+import logging
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -512,3 +513,102 @@ async def test_deterministic_isolates_single_point_failure(monkeypatch, tmp_path
     report = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
     assert report["retrieval"]["vector"]["A_policy"]["recall_at_5"] == 0.0
     assert report["generation"] is None
+
+
+# ---------- T19 台账落库(附加管理视图:写库失败只打一行日志,报告照落) ----------
+
+def _gen_d(cases):
+    return {"answer_coverage": {}, "faithfulness": {"hybrid_rerank": None},
+            "faithfulness_cases": cases, "refusal_rate": None,
+            "refusal_misses": [], "errors": []}
+
+
+def _ledger_case(cid):
+    return {"id": cid, "bucket": "A_policy", "query": "q", "strategy": "hybrid_rerank",
+            "answer": "a", "reason": "r", "citations": [{"n": 1}]}
+
+
+async def test_write_ledger_upserts_each_case_and_logs_recurred(monkeypatch):
+    from app.db import repository   # 脚本侧是懒 import,测试替身打在仓储模块上
+    calls = []
+
+    async def fake_upsert(case, judge_model=None):
+        calls.append((case, judge_model))
+        return {"id": len(calls), "recurred": case["id"] == "a2"}
+    monkeypatch.setattr(repository, "upsert_faith_case", fake_upsert)
+    cases = [_ledger_case("a1"), _ledger_case("a2")]
+    await ev._write_ledger(_gen_d(cases), {"chat_model": "glm-x"})
+    assert [c for c, _ in calls] == cases          # 每例一次,顺序照报告
+    assert all(jm == "glm-x" for _, jm in calls)   # judge_model 取 meta 的 chat 模型
+    assert any("本轮判出 2 例,复发 1 例" in ln for ln in ev._LINES)
+
+
+async def test_write_ledger_skips_when_generation_none(monkeypatch):
+    from app.db import repository
+
+    async def boom(case, judge_model=None):
+        raise AssertionError("生成段未完成不该碰台账")
+    monkeypatch.setattr(repository, "upsert_faith_case", boom)
+    await ev._write_ledger(None, {"chat_model": "glm-x"})   # 不抛即过
+
+
+async def test_write_ledger_failure_logs_one_warning(monkeypatch, caplog):
+    from app.db import repository
+
+    async def boom(case, judge_model=None):
+        raise RuntimeError("MySQL 没起")
+    monkeypatch.setattr(repository, "upsert_faith_case", boom)
+    with caplog.at_level(logging.WARNING, logger="scripts.eval_ch04"):
+        await ev._write_ledger(_gen_d([_ledger_case("a1")]), {"chat_model": "glm-x"})
+    warns = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warns) == 1   # 整块失败只打一行,不逐例刷屏
+
+
+async def test_main_report_lands_even_if_ledger_fails(monkeypatch, tmp_path):
+    from app.db import repository
+    gen = _gen_d([_ledger_case("a1")])
+
+    async def fake_det(samples):
+        return {}, {}, {}
+    async def fake_gen(samples, hits):
+        return gen
+    async def boom(case, judge_model=None):
+        raise RuntimeError("MySQL 没起")
+    monkeypatch.setattr(ev, "_load", lambda: [{"id": "a1"}])
+    monkeypatch.setattr(ev, "_deterministic", fake_det)
+    monkeypatch.setattr(ev, "_generation", fake_gen)
+    monkeypatch.setattr(ev, "_build_meta",
+                        lambda samples: {"chat_model": "glm-x", "n_samples": 1, "errors": []})
+    monkeypatch.setattr(ev, "_OUT_TXT", tmp_path / "r.txt")
+    monkeypatch.setattr(ev, "_OUT_JSON", tmp_path / "r.json")
+    monkeypatch.setattr(repository, "upsert_faith_case", boom)
+    assert await ev.main() == 0
+    report = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert report["generation"]["faithfulness_cases"] == gen["faithfulness_cases"]
+    assert (tmp_path / "r.txt").exists()
+
+
+async def test_main_writes_ledger_with_meta_chat_model(monkeypatch, tmp_path):
+    from app.db import repository
+    gen = _gen_d([_ledger_case("a1"), _ledger_case("a2")])
+    calls = []
+
+    async def fake_det(samples):
+        return {}, {}, {}
+    async def fake_gen(samples, hits):
+        return gen
+    async def fake_upsert(case, judge_model=None):
+        calls.append((case["id"], judge_model))
+        return {"id": len(calls), "recurred": False}
+    monkeypatch.setattr(ev, "_load", lambda: [{"id": "a1"}, {"id": "a2"}])
+    monkeypatch.setattr(ev, "_deterministic", fake_det)
+    monkeypatch.setattr(ev, "_generation", fake_gen)
+    monkeypatch.setattr(ev, "_build_meta",
+                        lambda samples: {"chat_model": "glm-x", "n_samples": 2, "errors": []})
+    monkeypatch.setattr(ev, "_OUT_TXT", tmp_path / "r.txt")
+    monkeypatch.setattr(ev, "_OUT_JSON", tmp_path / "r.json")
+    monkeypatch.setattr(repository, "upsert_faith_case", fake_upsert)
+    assert await ev.main() == 0
+    assert calls == [("a1", "glm-x"), ("a2", "glm-x")]
+    # 汇总行进运行日志,随 txt 落盘
+    assert "本轮判出 2 例,复发 0 例" in (tmp_path / "r.txt").read_text(encoding="utf-8")
