@@ -15,6 +15,7 @@
       { title: "⑤ 检索自测", href: "#search" },
       { title: "⑥ 最近入库", href: "#recent" },
     ] },
+    { key: "rageval", title: "RAG 评估", path: "/rag-eval", subs: [] },
     { key: "chat", title: "聊天页", path: "/", subs: [] },
   ];
 

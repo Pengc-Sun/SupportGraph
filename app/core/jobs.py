@@ -41,6 +41,8 @@ JOBS: dict[str, JobSpec] = {spec.name: spec for spec in [
     JobSpec("kb-mine", "kb-mine", heavy=True, description="对话挖知识(调 LLM)"),
     JobSpec("kb-reset", "kb-reset", heavy=True, description="清空知识库(MySQL+Milvus)"),
     JobSpec("seed-conv", "seed-conv", description="灌合成对话 seed"),
+    JobSpec("eval-rag", "eval-rag", heavy=True,
+            description="RAG 评估(四策略对照):需 Milvus + 已建库 + 上游可用,分钟级"),
 ]}
 
 _procs: dict[str, subprocess.Popen] = {}

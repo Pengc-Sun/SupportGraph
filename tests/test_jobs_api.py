@@ -96,6 +96,7 @@ async def test_every_job_target_exists_in_makefile():
 async def test_registry_heavy_flags_and_list(client):
     assert jobs.JOBS["kb-mine"].heavy is True
     assert jobs.JOBS["kb-reset"].heavy is True
+    assert jobs.JOBS["eval-rag"].heavy is True   # 分钟级评估重活,页面二次确认
     assert jobs.JOBS["kb-build"].heavy is False
     async with client as c:
         r = await c.get("/api/jobs")

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter
 
+from app.api import rageval
 from app.config import settings
 from app.db import repository
 from app.kb import milvus_client
@@ -83,8 +84,30 @@ async def _read_kb() -> dict:
     }
 
 
+async def _read_rageval() -> dict:
+    # 与 /api/rag-eval/overview 同一份读数(read_report),首页卡不另算指标
+    report = rageval.read_report()
+    metrics = {"best_mrr": None, "n_samples": None, "refusal_rate": None}
+    if report is None:
+        return {"status": "未跑过", "metrics": metrics,
+                "summary": "还没跑过 RAG 评估,去页面按一次「重跑」"}
+    meta = report.get("meta") or {}
+    retrieval = report.get("retrieval") or {}
+    generation = report.get("generation") or {}
+    best = rageval.best_strategy(retrieval)
+    best_mrr = retrieval[best]["overall"]["mrr"] if best else None
+    metrics = {"best_mrr": best_mrr, "n_samples": meta.get("n_samples"),
+               "refusal_rate": generation.get("refusal_rate")}
+    def fmt(v):
+        return "—" if v is None else f"{v:.3f}"
+    summary = (f"最佳 {best or '—'} MRR {fmt(best_mrr)},"
+               f"{meta.get('n_samples') or '—'} 题,库外拒答率 {fmt(metrics['refusal_rate'])}")
+    return {"status": "正常", "metrics": metrics, "summary": summary}
+
+
 MODULES: list[ModuleSpec] = [
     ModuleSpec(key="kb", title="知识库", path="/kb", read=_read_kb),
+    ModuleSpec(key="rageval", title="RAG 评估", path="/rag-eval", read=_read_rageval),
 ]
 
 

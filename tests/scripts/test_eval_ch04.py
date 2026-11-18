@@ -261,6 +261,40 @@ def test_write_report_generation_none(tmp_path, monkeypatch):
     assert "向量" in js.read_text(encoding="utf-8")
 
 
+# ---------- meta(Ruling 22-1:模型配置 + 报告时知识库块数) ----------
+
+def test_build_meta_models_and_n_chunks(monkeypatch):
+    monkeypatch.setattr(ev.milvus_client, "get_client", lambda uri=None: object())
+    monkeypatch.setattr(ev.milvus_client, "count", lambda client, **kw: 321)
+    meta = ev._build_meta([{"id": "q1"}, {"id": "q2"}, {"id": "q3"}])
+    assert meta["n_samples"] == 3
+    assert meta["embed_model"] == ev.settings.embed_model
+    assert meta["rerank_model"] == ev.settings.rerank_model
+    # 裁判与生成同一个 chat 模型(自评自判是已知取舍)
+    assert meta["judge_model"] == meta["chat_model"] == ev.settings.chat_model
+    assert meta["n_chunks"] == 321
+    assert meta["k"] == ev.K and meta["strategies"] == ev.STRATEGIES
+    assert meta["eval_file"] == str(ev.EVAL_FILE)
+    assert "timestamp" in meta and meta["errors"] == []
+
+
+def test_build_meta_milvus_down_gives_none(monkeypatch):
+    def boom(uri=None):
+        raise ConnectionError("Milvus 没起")
+    monkeypatch.setattr(ev.milvus_client, "get_client", boom)
+    meta = ev._build_meta([])
+    assert meta["n_chunks"] is None   # 读不到不阻塞报告
+    assert meta["n_samples"] == 0
+
+
+def test_build_meta_count_failure_gives_none(monkeypatch):
+    monkeypatch.setattr(ev.milvus_client, "get_client", lambda uri=None: object())
+    def boom(client, **kw):
+        raise RuntimeError("count 失败")
+    monkeypatch.setattr(ev.milvus_client, "count", boom)
+    assert ev._build_meta([])["n_chunks"] is None
+
+
 # ---------- 回归:共享改写任务屏蔽取消 + 单点隔离 + 缓存可恢复(review Finding 1/2) ----------
 
 async def test_cached_understand_waiter_timeout_spares_shared_task(monkeypatch):

@@ -15,6 +15,7 @@ from app.config import settings
 from app.core import retrieval
 from app.core.llm import get_chat_model
 from app.core.prompts import FAITHFULNESS_PROMPT, RAG_ANSWER_PROMPT
+from app.kb import milvus_client
 from app.tools.business import query_faq
 
 STRATEGIES = ["vector", "bm25", "hybrid", "hybrid_rerank"]
@@ -341,6 +342,27 @@ def _write_report(retrieval_d, coverage_d, generation_d, meta):
     _OUT_JSON.write_text(json.dumps(report, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
+def _build_meta(samples):
+    """meta(Ruling 22-1):模型配置 + 报告时知识库块数;Milvus 读不到记 None,不阻塞报告。"""
+    try:
+        n_chunks = milvus_client.count(milvus_client.get_client())
+    except Exception:
+        n_chunks = None
+    return {
+        "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "eval_file": str(EVAL_FILE),
+        "n_samples": len(samples),
+        "strategies": STRATEGIES,
+        "k": K,
+        "chat_model": settings.chat_model,
+        "embed_model": settings.embed_model,
+        "rerank_model": settings.rerank_model,
+        "judge_model": settings.chat_model,   # 裁判与生成同一个 chat 模型
+        "n_chunks": n_chunks,
+        "errors": list(_errs),
+    }
+
+
 async def main():
     _reset()
     samples = _load()
@@ -352,15 +374,7 @@ async def main():
     except Exception as e:
         _errs.append(f"generation: {type(e).__name__}")
         _log(f"[生成段未完成] {e}")   # 上游恢复后重跑补全
-    meta = {
-        "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "eval_file": str(EVAL_FILE),
-        "n_samples": len(samples),
-        "strategies": STRATEGIES,
-        "k": K,
-        "chat_model": settings.chat_model,
-        "errors": list(_errs),
-    }
+    meta = _build_meta(samples)
     _log(f"报告落盘:{_OUT_TXT} / {_OUT_JSON}")
     _write_report(retrieval_d, coverage_d, generation_d, meta)
     return 0

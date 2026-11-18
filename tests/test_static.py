@@ -13,7 +13,8 @@ def client():
                        follow_redirects=True)
 
 
-@pytest.mark.parametrize("path", ["/kb", "/admin", "/static/kb.html", "/static/admin.html"])
+@pytest.mark.parametrize("path", ["/kb", "/admin", "/rag-eval",
+                                  "/static/kb.html", "/static/admin.html", "/static/rageval.html"])
 async def test_admin_pages_reachable_and_mount_shell(client, path):
     async with client as c:
         r = await c.get(path)

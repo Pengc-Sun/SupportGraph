@@ -128,7 +128,7 @@
     const wrap = document.createElement("div");
     wrap.className = "jobs";
     wrap.innerHTML = names.map(name => {
-      const heavy = name === "kb-mine" || name === "kb-reset";
+      const heavy = name === "kb-mine" || name === "kb-reset" || name === "eval-rag";
       return '<div class="job">'
         + '<div class="job-head">'
         + '<button class="btn' + (heavy ? " danger" : "") + '" data-job-start="' + name + '">'
@@ -159,7 +159,7 @@
     }).catch(() => {});
     return wrap;
   }
-  function heavy(name) { return name === "kb-mine" || name === "kb-reset"; }
+  function heavy(name) { return name === "kb-mine" || name === "kb-reset" || name === "eval-rag"; }
 
   window.Acceptance = { esc, api, post, toast, pill, fmtTime, mountJobs, logCache };
 })();

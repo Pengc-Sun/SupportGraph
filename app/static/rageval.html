@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 评估 · 喵喵优选</title>
+<link rel="stylesheet" href="/static/acceptance.css">
+<style>
+/* 页内私有样式:KPI 卡 / 纯 CSS 柱状图 / 忠实度横条 / 拒答率圆环 / 个案折叠 */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 16px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  box-shadow: 3px 3px 0 rgba(31,35,41,.06); }
+.kpi .k-label { font-size: 12px; color: var(--sub); }
+.kpi .k-num { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0; }
+.kpi .k-sub { font-size: 12px; color: var(--sub); }
+.kpi .k-num.up { color: var(--ok); }
+.meta-chips { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; }
+.meta-chips .mc { display: flex; align-items: baseline; gap: 6px; }
+.meta-chips .mc b { font-weight: 600; }
+.meta-chips .mc span.lb { color: var(--sub); font-size: 12px; }
+
+/* 指标页签 */
+.tabs { display: inline-flex; gap: 6px; margin: 6px 0 10px; }
+.tabs .chip.on { border-style: solid; border-color: var(--brand); color: var(--brand); background: var(--brand-soft); font-weight: 600; }
+
+/* 分组柱状图:纵轴 0~1,柱高按值百分比 */
+.chart-wrap { display: flex; gap: 8px; margin-top: 18px; }
+.y-axis { display: flex; flex-direction: column; justify-content: space-between; height: 220px;
+  font-size: 11px; color: var(--sub); text-align: right; padding-right: 2px; font-variant-numeric: tabular-nums; }
+.plot { flex: 1; min-width: 0; }
+.plot-area { position: relative; height: 220px; }
+.plot-area .gl { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line); }
+.groups { position: relative; display: flex; height: 220px; align-items: flex-end; justify-content: space-around; }
+.group { display: flex; align-items: flex-end; justify-content: center; gap: 6px; flex: 1; min-width: 0; height: 100%; }
+.bar { position: relative; width: 34px; border-radius: 4px 4px 0 0; min-height: 2px; }
+.bar .bv { position: absolute; top: -17px; left: 50%; transform: translateX(-50%);
+  font-size: 10.5px; color: var(--sub); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bar.na { background: var(--line) !important; }
+.gx-row { display: flex; justify-content: space-around; margin-top: 6px; }
+.gx { flex: 1; text-align: center; font-size: 12px; color: var(--sub); white-space: nowrap; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12px; color: var(--sub); }
+.legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.legend .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.read-line { margin-top: 10px; font-size: 13px; background: var(--info-soft); border: 1px solid #c4d7ff;
+  border-radius: 8px; padding: 7px 12px; }
+
+/* 生成质量:横条 + 圆环 */
+.gen-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .gen-grid { grid-template-columns: 1fr; } }
+.hbar-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 12.5px; }
+.hbar-row .hl { width: 92px; color: var(--sub); text-align: right; flex: none; }
+.hbar { flex: 1; height: 14px; background: #f2f3f5; border-radius: 999px; overflow: hidden; }
+.hbar i { display: block; height: 100%; border-radius: 999px; background: var(--brand); }
+.hbar-row .hv { width: 46px; font-variant-numeric: tabular-nums; flex: none; }
+.ring-box { text-align: center; }
+.subhead { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+
+/* 完整数据表 + 个案 */
+table.tb tr.best-row td { background: var(--brand-soft); }
+details.cases { margin-top: 12px; }
+details.cases summary { cursor: pointer; font-size: 13px; color: var(--sub); }
+.case-item { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 8px; font-size: 13px; }
+.case-item .c-q { font-weight: 600; margin: 4px 0; }
+.case-item pre { white-space: pre-wrap; word-break: break-all; font-family: inherit; font-size: 12.5px;
+  background: #fafbfc; border-radius: 6px; padding: 8px 10px; margin-top: 4px; }
+.case-item .why { color: var(--err); font-size: 12.5px; margin-top: 6px; }
+.empty-state { text-align: center; padding: 46px 20px; }
+.empty-state .big { font-size: 40px; }
+.empty-state h3 { font-size: 17px; margin: 10px 0 6px; }
+</style>
+</head>
+<body>
+<script src="/static/admin.js"></script>
+<script src="/static/acceptance.js"></script>
+
+<div class="gate">
+  <span class="g-title">📊 RAG 评估</span>
+  <span class="g-item"><span class="g-num" id="g-n">—</span><span class="g-label">评估题数</span></span>
+  <span class="g-item"><span class="g-num" id="g-chunks">—</span><span class="g-label">知识库块数</span></span>
+  <span class="g-item"><span class="g-label">上次运行</span><span class="g-num" id="g-time" style="font-size:14px">—</span></span>
+  <span class="g-item" style="margin-left:auto"><button class="btn mini" id="btn-refresh">刷新读数</button></span>
+</div>
+
+<main>
+  <div id="report"><div class="panel"><span class="muted">加载中…</span></div></div>
+
+  <!-- 就地重跑:共用白名单作业运行器,分钟级重活二次确认 -->
+  <section class="panel" id="rerun">
+    <h2>就地重跑 RAG 评估</h2>
+    <div class="p-sub">与终端 make eval-rag 同一条命令(服务器白名单写死,页面只传作业名)。需 Milvus + 已建库 + 上游可用,分钟级;跑完自动重新取数。</div>
+    <div id="jobs-rageval"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+mountAdminNav("rageval");
+const A = window.Acceptance;
+const $ = id => document.getElementById(id);
+
+// 展示常量:策略配色与桶名(数值一律来自 overview,不在前端重算指标)
+const ST = {
+  vector:        { label: "向量",       color: "#1664ff" },
+  bm25:          { label: "BM25",       color: "#d48806" },
+  hybrid:        { label: "混合 RRF",   color: "#2da44e" },
+  hybrid_rerank: { label: "混合+重排",  color: "#ff7a45" },
+};
+const BUCKETS = [
+  { key: "A_policy", label: "A 政策" },
+  { key: "B_model", label: "B 型号" },
+  { key: "C_colloquial", label: "C 口语" },
+];
+let DATA = null;
+let metric = "mrr";   // mrr | recall | coverage
+
+const fmt3 = v => v == null ? "—" : Number(v).toFixed(3);
+const pct = v => v == null ? "—" : (Number(v) * 100).toFixed(1) + "%";
+const stLabel = st => (ST[st] && ST[st].label) || st;
+const stColor = st => (ST[st] && ST[st].color) || "#8a919f";
+const strategies = () => (DATA.meta && DATA.meta.strategies) || Object.keys(DATA.retrieval || {});
+const recallLabel = () => "Recall@" + ((DATA.meta && DATA.meta.k != null) ? DATA.meta.k : "K");
+
+// ---------- 报告头 ----------
+function renderGate() {
+  const m = DATA.present ? (DATA.meta || {}) : {};
+  $("g-n").textContent = m.n_samples == null ? "—" : m.n_samples;
+  $("g-chunks").textContent = m.n_chunks == null ? "—" : m.n_chunks;
+  $("g-time").textContent = A.fmtTime(m.timestamp);
+}
+
+function headPanel() {
+  const m = DATA.meta || {};
+  const errs = (m.errors || []).length;
+  const chip = (lb, v) => '<span class="mc"><span class="lb">' + A.esc(lb) + "</span><b>" + A.esc(v == null ? "—" : v) + "</b></span>";
+  return '<section class="panel"><h2>① 报告头</h2>'
+    + '<div class="p-sub">这一轮评估用的是哪套模型、多少题、库里多少块——数都来自 make eval-rag 落盘的那份 json。</div>'
+    + '<div class="meta-chips">'
+    + chip("评估集题数", m.n_samples) + chip("知识库块数", m.n_chunks)
+    + chip("嵌入模型", m.embed_model) + chip("重排模型", m.rerank_model)
+    + chip("裁判模型", m.judge_model || m.chat_model)
+    + chip("Top-K", m.k) + chip("上次运行", A.fmtTime(m.timestamp))
+    + "</div>"
+    + (errs ? '<div class="row">' + A.pill("本轮记账 " + errs + " 条错误(详见报告 json meta.errors)", "warn") + "</div>" : "")
+    + "</section>";
+}
+
+// ---------- 四项 KPI ----------
+function kpiCards() {
+  const r = DATA.retrieval || {}, g = DATA.generation;
+  const best = DATA.best;
+  const bestMrr = best && r[best] && r[best].overall ? r[best].overall.mrr : null;
+  // 口语桶提升:展示层减法(hybrid_rerank − vector),标的就是端出来的两个数
+  const cHr = r.hybrid_rerank && r.hybrid_rerank.C_colloquial ? r.hybrid_rerank.C_colloquial.mrr : null;
+  const cVec = r.vector && r.vector.C_colloquial ? r.vector.C_colloquial.mrr : null;
+  const lift = (cHr != null && cVec != null) ? cHr - cVec : null;
+  const ansCov = g && g.answer_coverage && g.answer_coverage.hybrid_rerank ? g.answer_coverage.hybrid_rerank.overall : null;
+  const refusal = g ? g.refusal_rate : null;
+  const card = (label, numHtml, sub) =>
+    '<div class="kpi"><div class="k-label">' + A.esc(label) + '</div><div class="k-num">' + numHtml + '</div><div class="k-sub">' + sub + "</div></div>";
+  const pending = A.pill("未完成", "warn");
+  return '<div class="kpis">'
+    + card("最佳整体 MRR", A.esc(fmt3(bestMrr)), best ? "来自 <b>" + A.esc(stLabel(best)) + "</b>(" + A.esc(best) + ")" : "暂无可比的策略")
+    + card("口语桶 MRR 提升", lift == null ? "—" : '<span class="' + (lift >= 0 ? "up" : "") + '">' + (lift >= 0 ? "+" : "") + A.esc(lift.toFixed(3)) + "</span>",
+        "混合+重排 − 向量(C 口语桶,展示层减法)")
+    + card("答案覆盖度", ansCov == null ? pending : A.esc(fmt3(ansCov)), "混合+重排 · 总体(LLM 裁判数要点)")
+    + card("库外拒答率", refusal == null ? pending : A.esc(pct(refusal)), "D 桶库外问题应全部拒答")
+    + "</div>";
+}
+
+// ---------- 分组柱状图(纯 CSS) ----------
+// groups: [{label, values: {strategy: number|null}}]
+function chart(groups) {
+  const sts = strategies();
+  const gl = [0, 25, 50, 75, 100].map(p =>
+    '<div class="gl" style="bottom:' + p + '%"></div>').join("");
+  const body = groups.map(g => {
+    const bars = sts.map(st => {
+      const v = g.values[st];
+      const h = v == null ? 0 : Math.max(0, Math.min(1, v)) * 100;
+      return '<div class="bar' + (v == null ? " na" : "") + '" style="height:' + h.toFixed(1) + "%;background:" + stColor(st)
+        + '" title="' + A.esc(stLabel(st) + " " + fmt3(v)) + '"><span class="bv">' + A.esc(fmt3(v)) + "</span></div>";
+    }).join("");
+    return '<div class="group">' + bars + "</div>";
+  }).join("");
+  const gxRow = groups.map(g => '<div class="gx">' + A.esc(g.label) + "</div>").join("");
+  const legend = sts.map(st =>
+    '<span class="lg"><span class="sw" style="background:' + stColor(st) + '"></span>' + A.esc(stLabel(st)) + "</span>").join("");
+  return '<div class="chart-wrap"><div class="y-axis"><span>1.0</span><span>0.75</span><span>0.5</span><span>0.25</span><span>0</span></div>'
+    + '<div class="plot"><div class="plot-area">' + gl + '<div class="groups">' + body + "</div></div>"
+    + '<div class="gx-row">' + gxRow + "</div></div></div>"
+    + '<div class="legend">' + legend + "</div>";
+}
+
+function metricValue(st, bucket) {
+  const r = DATA.retrieval || {}, c = DATA.evidence_coverage || {};
+  if (metric === "coverage") return (c[st] || {})[bucket];
+  const b = (r[st] || {})[bucket];
+  return b ? b[metric] : null;
+}
+
+function retrievalPanel() {
+  const tabs = [["mrr", "MRR"], ["recall", recallLabel()], ["coverage", "证据覆盖度"]]
+    .map(([k, lb]) => '<button class="chip' + (metric === k ? " on" : "") + '" data-metric="' + k + '">' + A.esc(lb) + "</button>").join("");
+  const groups = BUCKETS.map(b => ({
+    label: b.label,
+    values: Object.fromEntries(strategies().map(st => [st, metricValue(st, b.key)])),
+  }));
+  // 读图句:各策略 overall 里挑最高(展示层比较,数仍是端出来的那份)
+  let topSt = null, topV = null;
+  strategies().forEach(st => {
+    const v = metricValue(st, "overall");
+    if (v != null && (topV == null || v > topV)) { topSt = st; topV = v; }
+  });
+  const metricName = metric === "mrr" ? "MRR" : metric === "recall" ? recallLabel() : "证据覆盖度";
+  const readLine = topSt == null ? "这一指标本轮没有可用读数。"
+    : "读图:" + metricName + " 总体最高的是「" + stLabel(topSt) + "」(" + fmt3(topV) + ")"
+      + (metric === "mrr" && DATA.best ? ",与 KPI 卡的最佳策略一致" : "") + ";三根桶柱看各策略在哪类问法上占优。";
+  return '<section class="panel"><h2>② 检索质量</h2>'
+    + '<div class="p-sub">四策略 × 三个可作答桶(D 库外桶不计检索分)。指标切着看,数与终端报告同一份。</div>'
+    + '<div class="tabs">' + tabs + "</div>"
+    + chart(groups)
+    + '<div class="read-line">' + A.esc(readLine) + "</div>"
+    + "</section>";
+}
+
+// ---------- 生成质量 ----------
+function ring(rate) {
+  const R = 45, C = 2 * Math.PI * R;
+  const dash = rate == null ? 0 : Math.max(0, Math.min(1, rate)) * C;
+  return '<svg width="130" height="130" viewBox="0 0 120 120" role="img" aria-label="库外拒答率">'
+    + '<circle cx="60" cy="60" r="' + R + '" fill="none" stroke="#e6e8eb" stroke-width="12"/>'
+    + '<circle cx="60" cy="60" r="' + R + '" fill="none" stroke="#2da44e" stroke-width="12" stroke-linecap="round"'
+    + ' stroke-dasharray="' + dash.toFixed(1) + " " + C.toFixed(1) + '" transform="rotate(-90 60 60)"/>'
+    + '<text x="60" y="57" text-anchor="middle" font-size="17" font-weight="700" fill="#1f2329">' + A.esc(rate == null ? "未完成" : pct(rate)) + "</text>"
+    + '<text x="60" y="76" text-anchor="middle" font-size="10" fill="#8a919f">库外拒答率</text>'
+    + "</svg>";
+}
+
+function generationPanel() {
+  const head = '<section class="panel"><h2>③ 生成质量</h2>'
+    + '<div class="p-sub">检索捞上来的证据交给同一个 chat 模型生成,再由裁判数要点、判忠实。上游挂掉那轮此段为空,补跑一次就齐。</div>';
+  if (!DATA.generation_done) {
+    return head + '<div class="row">' + A.pill("本次生成段未完成,补跑一次就齐", "warn")
+      + '<span class="muted">检索质量与证据覆盖度不受影响,照常可看。</span></div></section>';
+  }
+  const g = DATA.generation || {};
+  const covGroups = [{ label: "总体", values: Object.fromEntries(strategies().map(st =>
+    [st, ((g.answer_coverage || {})[st] || {}).overall])) }];
+  const faith = (g.faithfulness || {}).hybrid_rerank;
+  const misses = g.refusal_misses || [];
+  return head + '<div class="gen-grid">'
+    + '<div><div class="subhead">四策略答案覆盖度(总体)</div>' + chart(covGroups) + "</div>"
+    + '<div><div class="subhead">上线管线忠实度(混合+重排)</div>'
+    + (faith == null ? A.pill("未完成", "warn")
+        : '<div class="hbar-row"><span class="hl">Faithfulness</span><div class="hbar"><i style="width:' + (faith * 100).toFixed(1) + '%"></i></div><span class="hv">' + A.esc(pct(faith)) + "</span></div>"
+          + '<div class="muted">主张被证据支撑的比例;不忠实个案见下方「完整数据」。</div>')
+    + "</div>"
+    + '<div class="ring-box"><div class="subhead">D 桶拒答</div>' + ring(g.refusal_rate)
+    + (misses.length ? '<div class="muted">漏拒 ' + misses.length + " 题:" + A.esc(misses.join("、")) + "</div>" : '<div class="muted">应拒答的库外问题全部拒答</div>')
+    + "</div></div></section>";
+}
+
+// ---------- 完整数据 ----------
+function tablePanel() {
+  const r = DATA.retrieval || {}, c = DATA.evidence_coverage || {};
+  const g = DATA.generation_done ? (DATA.generation || {}) : null;
+  const rows = strategies().map(st => {
+    const mrrCell = b => '<td class="num">' + A.esc(fmt3(((r[st] || {})[b] || {}).mrr)) + "</td>";
+    const ans = g && (g.answer_coverage || {})[st] ? g.answer_coverage[st].overall : null;
+    return '<tr' + (st === DATA.best ? ' class="best-row"' : "") + ">"
+      + "<td>" + A.esc(stLabel(st)) + (st === DATA.best ? " " + A.pill("最佳", "ok") : "") + "</td>"
+      + mrrCell("A_policy") + mrrCell("B_model") + mrrCell("C_colloquial")
+      + '<td class="num"><b>' + A.esc(fmt3(((r[st] || {}).overall || {}).mrr)) + "</b></td>"
+      + '<td class="num">' + A.esc(fmt3((c[st] || {}).overall)) + "</td>"
+      + '<td class="num">' + A.esc(g ? fmt3(ans) : "未完成") + "</td></tr>";
+  }).join("");
+  const cases = (g && g.faithfulness_cases) || [];
+  const caseHtml = cases.map(cs =>
+    '<div class="case-item"><div>' + A.pill(cs.bucket || "—", "mute") + " " + A.pill(cs.id || "—", "info") + "</div>"
+    + '<div class="c-q">' + A.esc(cs.query) + "</div>"
+    + "<pre>" + A.esc(cs.answer) + "</pre>"
+    + '<div class="why">裁判理由:' + A.esc(cs.reason || "(未给理由)") + "</div></div>").join("");
+  return '<section class="panel"><h2>④ 完整数据</h2>'
+    + '<div class="p-sub">分桶 MRR 与两项覆盖度汇总;总体 MRR 最佳那一行带底色。数与上面每张图同源。</div>'
+    + '<table class="tb"><thead><tr><th>策略</th><th>A 政策 MRR</th><th>B 型号 MRR</th><th>C 口语 MRR</th>'
+    + "<th>总体 MRR</th><th>证据覆盖度·总体</th><th>答案覆盖度·总体</th></tr></thead><tbody>" + rows + "</tbody></table>"
+    + '<details class="cases"><summary>编造个案 ' + cases.length + " 例(点开逐条看问题、生成答案、裁判理由)</summary>"
+    + (cases.length ? caseHtml : '<div class="muted" style="margin-top:8px">本轮没有判出的编造个案。</div>')
+    + "</details></section>";
+}
+
+// ---------- 汇总渲染 ----------
+function render() {
+  renderGate();
+  const box = $("report");
+  if (!DATA.present) {
+    box.innerHTML = '<section class="panel"><div class="empty-state"><div class="big">🐾</div>'
+      + "<h3>还没跑过 RAG 评估</h3>"
+      + '<p class="muted">报告产物还不存在(或写坏了)。按下面「重跑 RAG 评估」跑一轮,几分钟后这里就会长出四策略对照的完整报告。</p>'
+      + '<p style="margin-top:10px"><a class="btn primary" href="#rerun">去跑一次 ↓</a></p>'
+      + "</div></section>";
+    return;
+  }
+  box.innerHTML = headPanel() + kpiCards() + retrievalPanel() + generationPanel() + tablePanel();
+  box.querySelectorAll(".tabs .chip").forEach(ch =>
+    ch.addEventListener("click", () => { metric = ch.dataset.metric; render(); }));
+}
+
+async function load() {
+  try {
+    DATA = await A.api("/api/rag-eval/overview");
+    if (!DATA || typeof DATA.present !== "boolean") throw new Error("响应不是评估概览");
+  } catch (e) {
+    $("report").innerHTML = '<section class="panel"><div class="err-text">评估报告读数失败:' + A.esc(e.message) + "</div></section>";
+    return;
+  }
+  render();
+}
+
+$("btn-refresh").addEventListener("click", load);
+// 作业面板只挂载一次;跑完回调只刷数据区,日志尾另有缓存,重建也不丢
+A.mountJobs($("jobs-rageval"), ["eval-rag"], {
+  onFinish: (name, st) => {
+    load();
+    if (st.exit_code === 0) A.toast("评估跑完,报告已刷新", "ok");
+    else A.toast(name + " 结束但 exit=" + st.exit_code + ",看日志尾", "warn");
+  },
+});
+load();
+</script>
+</body>
+</html>

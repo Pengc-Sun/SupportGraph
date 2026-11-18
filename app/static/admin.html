@@ -24,6 +24,7 @@ const A = window.Acceptance;
 // 状态药丸:API 给「正常 / 读数失败」;「要干活 / 没数据」由关键数推导
 function cardStatus(card) {
   if (card.status === "读数失败") return { text: "读数失败", kind: "err" };
+  if (card.status === "未跑过") return { text: "未跑过", kind: "mute" };
   const m = card.metrics || {};
   if (m.total === 0) return { text: "没数据", kind: "mute" };
   if (m.pending > 0 || m.consistent === false) return { text: "要干活", kind: "warn" };
@@ -33,11 +34,13 @@ function cardStatus(card) {
 const METRIC_LABELS = {
   total: "知识块", pending: "待向量化", done: "已向量化", key_clauses: "关键条款",
   milvus_count: "Milvus 条数", consistent: "双写", embed_configured: "嵌入 key",
+  best_mrr: "最佳 MRR", n_samples: "评估题数", refusal_rate: "库外拒答率",
 };
 function metricText(key, v) {
   if (v == null) return "—";
   if (key === "consistent") return v ? "一致" : "对不上";
   if (key === "embed_configured") return v ? "已配置" : "未配置";
+  if (key === "best_mrr" || key === "refusal_rate") return Number(v).toFixed(3);
   return String(v);
 }
 
