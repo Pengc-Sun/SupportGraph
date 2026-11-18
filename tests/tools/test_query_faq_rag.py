@@ -49,6 +49,20 @@ async def test_query_faq_self_check_fail(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_query_faq_self_check_empty_reason_fallback(monkeypatch):
+    """Ruling 19-3:自评 reason 为空时兜底文案,落池信号自包含。"""
+    async def fake_search(query, **kw):
+        return [{"id": 1, "rerank_score": 0.8, "question": "运费", "answer": "满99包邮",
+                 "section_path": "p", "content_type": "faq", "category": "运费"}]
+    monkeypatch.setattr("app.core.retrieval.search_knowledge", fake_search)
+    async def fake_check(q, texts): return {"useful": False, "reason": ""}
+    monkeypatch.setattr("app.core.selfcheck.check_sufficient", fake_check)
+    out = await business.query_faq.ainvoke({"keyword": "问题"})
+    assert out["sufficient"] is False and out["source"] == "self_check"
+    assert out["reason"] == "证据与问题不相关或缺少关键信息"
+
+
+@pytest.mark.asyncio
 async def test_query_faq_mechanical_gate_low_score(monkeypatch):
     """Ruling 18-3/8a:最高 rerank 分 0.1 < 0.3 → retrieval_low_conf,语义闸不跑。"""
     async def fake_search(query, **kw):

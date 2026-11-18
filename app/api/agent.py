@@ -30,4 +30,5 @@ async def run_agent(req: AgentRequest) -> AgentResponse:
         tool_results=[ToolResultView(tool_call_id=r.tool_call_id, name=r.name, ok=r.ok,
                                      content=r.tool_message.content)
                       for r in result.tool_runs],
+        citations=result.citations,
     )

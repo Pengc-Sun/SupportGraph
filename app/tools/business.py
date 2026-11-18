@@ -76,7 +76,7 @@ async def query_faq(keyword: str, category: str | None = None) -> dict:
     chk = await selfcheck.check_sufficient(keyword, ev_texts)
     if not chk["useful"]:
         return {"sufficient": False, "source": "self_check",
-                "reason": chk["reason"], "citations": []}
+                "reason": chk["reason"] or "证据与问题不相关或缺少关键信息", "citations": []}
 
     # 首尾组装 + 编号(evidence [n] 与 citations 顺序一致)
     arranged = retrieval.arrange_head_tail(hits)

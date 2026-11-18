@@ -13,6 +13,8 @@ def _fake_result():
         answer="订单 1001 正在运输中。",
         tool_calls=[{"name": "query_logistics", "args": {"order_id": "1001"}, "id": "c1"}],
         tool_runs=[ToolRun("c1", "query_logistics", True, tm)],
+        citations=[{"n": 1, "id": 5, "section_path": "运费政策", "question": "运费",
+                    "answer": "满99包邮", "content_type": "faq"}],
     )
 
 def test_agent_endpoint_returns_tool_trace(monkeypatch):
@@ -26,6 +28,8 @@ def test_agent_endpoint_returns_tool_trace(monkeypatch):
     assert body["conversation_id"] == 12
     assert body["tool_calls"][0]["name"] == "query_logistics"
     assert body["tool_results"][0]["ok"] is True
+    # Ruling 19-4:/api/agent 显式序列化 AgentResult 字段,citations 同步透出(与流式对齐)
+    assert body["citations"][0]["id"] == 5
 
 def test_agent_endpoint_404_on_unknown_conversation(monkeypatch):
     async def fake_run(*a, **k):

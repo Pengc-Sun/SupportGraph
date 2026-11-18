@@ -21,3 +21,4 @@ class AgentResponse(BaseModel):
     answer: str
     tool_calls: list[ToolCallView]
     tool_results: list[ToolResultView]
+    citations: list[dict] = Field(default_factory=list, description="query_faq 足证据时的编号引用")

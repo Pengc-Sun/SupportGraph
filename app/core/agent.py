@@ -1,6 +1,8 @@
 import asyncio
+import json
+import logging
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
@@ -13,6 +15,8 @@ from app.db.models import Message
 from app.tools.infra import ToolRun, execute_tool_call
 from app.tools.registry import get_all_tools
 
+logger = logging.getLogger(__name__)
+
 class ConversationNotFound(Exception):
     pass
 
@@ -22,6 +26,7 @@ class AgentResult:
     answer: str
     tool_calls: list[dict]
     tool_runs: list[ToolRun]
+    citations: list = field(default_factory=list)
 
 def _text(msg: AIMessage) -> str:
     if isinstance(msg.content, str):
@@ -73,6 +78,24 @@ async def _prepare_turn(user_id, message, conversation_id, model):
             )
     return conversation_id, messages, ai, runs
 
+def _faq_result(runs) -> dict | None:
+    """取本轮首个 query_faq 的结果 JSON;解析失败/无该工具 → None。"""
+    for r in runs:
+        if getattr(r, "name", None) == "query_faq":
+            try:
+                return json.loads(r.tool_message.content)
+            except (ValueError, TypeError):
+                return None
+    return None
+
+async def _pool_low_confidence(conversation_id, message, faq: dict) -> None:
+    """证据不足落低置信池(raw_question=用户原话)。落池失败只告警,拒答生成照常。"""
+    try:
+        await repository.insert_low_confidence(
+            conversation_id, message, faq.get("source", "self_check"), faq.get("reason"))
+    except Exception:  # noqa: BLE001 - MySQL 故障不能拖垮聊天
+        logger.warning("低置信问题落池失败 cid=%s", conversation_id, exc_info=True)
+
 async def run_agent_turn(user_id, message, conversation_id, model=None) -> AgentResult:
     """非流式出口:一次性返回工具轨迹 + 最终回答(供 /api/agent、eval、单测)。"""
     model = model or get_chat_model()
@@ -80,10 +103,17 @@ async def run_agent_turn(user_id, message, conversation_id, model=None) -> Agent
         user_id, message, conversation_id, model)
     if not ai.tool_calls:
         return AgentResult(conversation_id, _text(ai), [], [])
+    faq = _faq_result(runs)
+    citations: list = []
+    if faq is not None:
+        if faq.get("sufficient"):
+            citations = faq.get("citations", [])
+        else:
+            await _pool_low_confidence(conversation_id, message, faq)
     final: AIMessage = await model.ainvoke(         # 收敛:不 bind_tools
         [*messages, ai, *(r.tool_message for r in runs)])
     await repository.append_message(conversation_id, "assistant", content=_text(final))
-    return AgentResult(conversation_id, _text(final), ai.tool_calls, runs)
+    return AgentResult(conversation_id, _text(final), ai.tool_calls, runs, citations=citations)
 
 async def stream_agent_turn(user_id, message, conversation_id, model=None) -> AsyncIterator[dict]:
     """流式出口:产出事件 dict 供 /api/chat 转 SSE。收敛用 astream 逐 token、不 bind。"""
@@ -99,6 +129,14 @@ async def stream_agent_turn(user_id, message, conversation_id, model=None) -> As
 
     for tc in ai.tool_calls:
         yield {"type": "tool", "name": tc.get("name") or ""}
+
+    # 工具轨迹帧后、收敛生成前:足证据下发 citations;不足则落池(拒答由 system prompt 引导)
+    faq = _faq_result(runs)
+    if faq is not None:
+        if faq.get("sufficient"):
+            yield {"type": "citations", "items": faq.get("citations", [])}
+        else:
+            await _pool_low_confidence(conversation_id, message, faq)
 
     chunks: list[str] = []
     async for chunk in model.astream([*messages, ai, *(r.tool_message for r in runs)]):
