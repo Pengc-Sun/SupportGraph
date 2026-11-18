@@ -8,7 +8,8 @@ SOURCE_TYPES = {
     "product-faq.md": "faq",
     "returns-policy.md": "policy",
     "after-sales-manual.md": "manual",
+    "product-specs.md": "spec",
 }
 
 # 录入允许的 content_type 白名单(mined 留给对话挖知识)
-CONTENT_TYPES = {"faq", "policy", "manual", "mined"}
+CONTENT_TYPES = {"faq", "policy", "manual", "spec", "mined"}

@@ -6,6 +6,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.db import repository
 from app.kb import chunking, documents, milvus_client
+from app.kb.sources import SOURCE_TYPES
 from app.main import app
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -214,7 +215,7 @@ async def test_overview_consistent_none_when_milvus_down(client, db_session_fact
     assert d["mysql"]["total"] == 1 and d["mysql"]["pending"] == 1
     assert d["milvus_count"] is None
     assert d["consistent"] is None  # 读不到,不是 False(对不上)
-    assert len(d["sources"]) == 3   # 材料清单不依赖 Milvus
+    assert len(d["sources"]) == len(SOURCE_TYPES)   # 材料清单不依赖 Milvus
     assert d["jobs"]                # 作业状态照样给
 
 
@@ -229,7 +230,7 @@ async def test_overview_consistent_none_when_mysql_down(client, db_session_facto
     assert d["mysql"] is None
     assert d["milvus_count"] == 0
     assert d["consistent"] is None
-    assert len(d["sources"]) == 3
+    assert len(d["sources"]) == len(SOURCE_TYPES)
     assert d["staging"] is None     # 暂存读数同样不连坐
     assert d["jobs"]
 
