@@ -33,7 +33,8 @@ async def main() -> None:
             note = ""
             if msg == "邮费是多少":
                 faq = [tr for tr in body["tool_results"] if tr["name"] == "query_faq"]
-                miss = faq and '"hits": []' in faq[0]["content"]
+                # infra.execute_tool_call 用 json.dumps(默认分隔符)序列化 → False 变 "false"
+                miss = faq and '"sufficient": false' in faq[0]["content"]
                 note = f" [漏召回={'是' if miss else '否'}]"
             print(f"{'✅' if ok else '❌'} {msg!r} -> {names or '(未调用)'} 期望={expect}{note}")
             print(f"    answer: {body['answer'][:60]}")

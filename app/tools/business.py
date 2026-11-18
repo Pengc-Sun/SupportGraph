@@ -5,7 +5,7 @@ from langchain_core.tools import InjectedToolArg, tool
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.core import retrieval
+from app.core import retrieval, selfcheck
 from app.db import repository
 
 class OrderInput(BaseModel):
@@ -54,18 +54,39 @@ async def query_logistics(order_id: str) -> dict:
     }
 
 class FaqInput(BaseModel):
-    keyword: str = Field(description="用于在常见问题库中检索的关键词,如『退货』『发货时效』")
+    keyword: str = Field(description="用户咨询的政策/规则/操作类问题(可用原话)")
+    category: str | None = Field(default=None, description="可选:按品类过滤,如『运费』『退货』『商品手册』")
 
 @tool(args_schema=FaqInput)
-async def query_faq(keyword: str) -> dict:
-    """根据关键词查询常见问题解答(FAQ)。用于用户咨询政策、规则、操作流程等通用问题时。"""
-    # ch04 过渡期显式走 ch03 在线行为(dense 单路 + 阈值),T10 再换 RAG 管线
+async def query_faq(keyword: str, category: str | None = None) -> dict:
+    """查询常见问题/政策知识库(混合检索+重排)。用于政策、规则、时效、费用、商品手册等通用问题。
+    返回带编号证据供作答引用;证据不足时返回 sufficient=False,请据此向用户拒答。"""
+    # Ruling 18:原话直传,Query 理解在 retrieval 内部只做一次;语义闸也收原话
     hits = await retrieval.search_knowledge(
-        keyword, strategy="vector",
-        top_k=settings.retrieval_top_k, min_score=settings.retrieval_min_score)
-    if not hits:
-        return {"hits": [], "message": f"未找到与「{keyword}」相关的常见问题"}
-    return {"hits": [{"question": h["question"], "answer": h["answer"]} for h in hits]}
+        keyword, strategy="hybrid_rerank", category=category)
+
+    # 机械闸:无召回 or 最高分低于阈值(hybrid_rerank 按 rerank 分降序,[0] 即最高)
+    top = hits[0]["rerank_score"] if hits else 0.0
+    if not hits or top < settings.rerank_min_score:
+        return {"sufficient": False, "source": "retrieval_low_conf",
+                "reason": f"检索证据不足(top={top:.3f})", "citations": []}
+
+    # 语义闸:生成前自评证据够不够
+    ev_texts = [f"{h['question']} {h['answer']}" for h in hits]
+    chk = await selfcheck.check_sufficient(keyword, ev_texts)
+    if not chk["useful"]:
+        return {"sufficient": False, "source": "self_check",
+                "reason": chk["reason"], "citations": []}
+
+    # 首尾组装 + 编号(evidence [n] 与 citations 顺序一致)
+    arranged = retrieval.arrange_head_tail(hits)
+    citations = [
+        {"n": i + 1, "id": h["id"], "section_path": h["section_path"],
+         "question": h["question"], "answer": h["answer"], "content_type": h["content_type"]}
+        for i, h in enumerate(arranged)
+    ]
+    evidence = "\n".join(f"[{c['n']}] {c['question']}: {c['answer']}" for c in citations)
+    return {"sufficient": True, "evidence": evidence, "citations": citations}
 
 @tool
 async def create_ticket(

@@ -21,6 +21,7 @@ async def _understand(query: str) -> dict:
     """Query 理解只调一次;上游挂了降级原 query(检索必须活下来)。
     扩展词里原词子串的回声(T6 minor)确定性过滤掉。"""
     try:
+        # qu 内部已自行降级(T6),此处 try/except 为纵深防御(Ruling 18-7b)
         r = await understand(query)
     except Exception:
         logger.warning("Query 理解失败,降级为原 query: %s", query, exc_info=True)

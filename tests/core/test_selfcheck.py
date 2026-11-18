@@ -60,6 +60,20 @@ async def test_check_sufficient_wrong_tool_name_tolerant_parse(monkeypatch, tool
 
 
 @pytest.mark.asyncio
+async def test_check_sufficient_null_reason_keeps_judgment(monkeypatch):
+    """Ruling 18-7a:reason 显式 null 不该丢掉有效的 useful=False 判断(非 fail-open)。"""
+    raw = AIMessage(content="", tool_calls=[
+        {"name": "Tool", "args": {"useful": False, "reason": None}, "id": "x"},
+    ])
+    class Chain:
+        async def ainvoke(self, _):
+            return _result(parsed=None, raw=raw, parsing_error=ValueError("Unknown tool type"))
+    monkeypatch.setattr("app.core.selfcheck._chain", lambda: Chain())
+    out = await selfcheck.check_sufficient("Pro型号猫砂盆功能", ["满99元包邮"])
+    assert out == {"useful": False, "reason": ""}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("args", [
     {"reason": "缺 useful 字段"},          # 缺必填字段
     {"useful": [1, 2], "reason": "类型错"},  # useful 类型错

@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 class SelfCheck(BaseModel):
     useful: bool = Field(description="证据是否足以回答")
-    reason: str = Field(default="", description="判断依据")
+    # Ruling 18-7a:允许显式 null,避免 useful=False 的有效判断因 reason=None 校验失败被 fail-open 丢弃
+    reason: str | None = Field(default="", description="判断依据")
 
 
 def _chain():
