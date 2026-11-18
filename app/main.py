@@ -12,7 +12,7 @@ from app.api.jobs import router as jobs_router
 from app.api.kb import router as kb_router
 from app.api.rageval import router as rageval_router
 
-app = FastAPI(title="MewHelp", version="0.1.0")
+app = FastAPI(title="知行客服", version="0.1.0")
 app.include_router(chat_router)
 app.include_router(agent_router)
 app.include_router(extract_router)

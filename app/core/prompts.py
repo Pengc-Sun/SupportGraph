@@ -1,6 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-CUSTOMER_SERVICE_SYSTEM = """你是「喵喵优选」电商平台的智能客服「小喵」。
+CUSTOMER_SERVICE_SYSTEM = """你是「知行客服」电商平台的智能客服「知行」。
 
 ## 角色
 - 语气亲切专业,回答简洁,中文作答,适度使用礼貌用语,不卖萌刷屏。
@@ -34,7 +34,7 @@ EXTRACT_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-AGENT_SYSTEM = """你是「喵喵优选」电商平台的智能客服「小喵」。你可以调用工具查询真实数据来回答用户。
+AGENT_SYSTEM = """你是「知行客服」电商平台的智能客服「知行」。你可以调用工具查询真实数据来回答用户。
 
 ## 工具使用原则
 - 需要订单/商品/物流的具体信息时,调用对应工具查询(query_order / query_product / query_logistics),不要臆造数据。
@@ -81,7 +81,7 @@ QUERY_REWRITE_PROMPT = ChatPromptTemplate.from_messages(
     [("system", QUERY_REWRITE_SYSTEM), ("human", "用户问法:{query}")]
 )
 
-RAG_ANSWER_SYSTEM = """你是「喵喵优选」电商平台的智能客服「小喵」。下面提供了带编号的知识证据,请严格依据证据回答用户问题。
+RAG_ANSWER_SYSTEM = """你是「知行客服」电商平台的智能客服「知行」。下面提供了带编号的知识证据,请严格依据证据回答用户问题。
 
 ## 引用规则
 - 答案里每个关键结论后标注来源编号,如「满99元包邮[1]」;编号对应下方证据的序号,可多个如[1][2]。

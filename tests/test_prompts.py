@@ -20,7 +20,7 @@ def test_extract_prompt_renders_text():
 from app.core.prompts import AGENT_SYSTEM, AGENT_PROMPT
 
 def test_agent_system_covers_tool_principles():
-    for kw in ["小喵", "工具", "query_faq", "create_ticket", "不要臆造"]:
+    for kw in ["知行", "工具", "query_faq", "create_ticket", "不要臆造"]:
         assert kw in AGENT_SYSTEM
 
 def test_agent_prompt_has_history_placeholder():

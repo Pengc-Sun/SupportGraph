@@ -45,7 +45,7 @@
     nav.className = "adm-nav";
     const row = document.createElement("div");
     row.className = "adm-row";
-    row.innerHTML = '<span class="adm-brand">🐱 喵喵优选 · 后台</span>'
+    row.innerHTML = '<span class="adm-brand">🐱 知行客服 · 后台</span>'
       + MODULES.map(m =>
         '<a class="adm-item' + (m.key === active ? " adm-active" : "") + '" href="' + m.path + '">'
         + m.title + "</a>").join("")
