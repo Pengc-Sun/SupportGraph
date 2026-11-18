@@ -52,3 +52,6 @@ milvus-down:
 smoke-rag:
 	PYTHONPATH=. uv run python scripts/smoke_milvus_bm25.py
 	PYTHONPATH=. uv run python scripts/smoke_rerank.py
+
+eval-rag:
+	PYTHONPATH=. uv run python scripts/eval_ch04.py
