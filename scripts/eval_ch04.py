@@ -1,4 +1,4 @@
-"""ch04 四策略分桶评估:检索 Recall@K/MRR + 证据覆盖度(确定性)+ 生成三段(LLM)。
+"""ch04 四策略分桶评估:检索 Recall@5/@10/MRR + 证据覆盖度(确定性)+ 生成三段(LLM)。
 需已建库(make kb-build && make kb-vectorize)+ EMBED/RERANK/CHAT 上游可用。
 运行:PYTHONPATH=. uv run python scripts/eval_ch04.py(make eval-rag)
 产物:data/ch04/reports/rag_eval.{txt,json}——txt 是运行日志给人读,json 给评估页读。"""
@@ -19,8 +19,9 @@ from app.kb import milvus_client
 from app.tools.business import query_faq
 
 STRATEGIES = ["vector", "bm25", "hybrid", "hybrid_rerank"]
-GRADED_BUCKETS = ["A_policy", "B_model", "C_colloquial"]
-K = 10
+GRADED_BUCKETS = ["A_policy", "B_model", "C_colloquial", "E_multi"]
+K = 10          # 检索深度
+RECALL_K = 5    # 召回口径深度(与 K 分开配,同一批 top-10 命中里截前 5)
 RETR_CONCURRENCY, GEN_CONCURRENCY, CALL_TIMEOUT = 8, 3, 45.0   # 生成压低并发 + 每调用超时
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -89,11 +90,22 @@ def _section_match(expect_section, hits):
 
 
 def _recall_mrr(samples, hits_by_id):
-    ranks = [_section_match(s["expect_section"], hits_by_id.get(s["id"], [])) for s in samples]
-    n = len(ranks)
+    """recall@5/@10 + MRR。单证据桶一组别名(任一命中即 1);E_multi 按组给部分分,
+    MRR 按各组自身名次的倒数取平均、漏组记 0——不用「最后一块到位」口径(Ruling 24-4)。"""
+    r5s, r10s, mrrs = [], [], []
+    for s in samples:
+        hits = hits_by_id.get(s["id"], [])
+        groups = s.get("expect_sections_all") or [s.get("expect_section") or []]
+        ranks5 = [_section_match(g, hits[:RECALL_K]) for g in groups]
+        ranks10 = [_section_match(g, hits[:K]) for g in groups]
+        r5s.append(sum(1 for r in ranks5 if r) / len(groups))
+        r10s.append(sum(1 for r in ranks10 if r) / len(groups))
+        mrrs.append(sum(1.0 / r for r in ranks10 if r) / len(groups))
+    n = len(samples)
     return {
-        "recall": sum(1 for r in ranks if r) / n if n else None,
-        "mrr": sum(1.0 / r for r in ranks if r) / n if n else None,
+        "recall_at_5": sum(r5s) / n if n else None,
+        "recall_at_10": sum(r10s) / n if n else None,
+        "mrr": sum(mrrs) / n if n else None,
         "n": n,
     }
 
@@ -115,11 +127,12 @@ def _install_cached_understand():
             # shield:单个 waiter 超时取消不能杀死共享 Task(其他策略还在等它)
             return await asyncio.shield(task)
         except asyncio.CancelledError:
-            if task.cancelled():
-                cache.pop(query, None)   # 共享任务已死:逐出,下一策略重试
+            if task.cancelled() and cache.get(query) is task:
+                cache.pop(query, None)   # 共享任务已死:验明正身再逐出,不误伤并发装入的新任务
             return {"standard": query, "expanded": []}   # waiter 侧取消:降级原 query
         except Exception:
-            cache.pop(query, None)   # 失败任务不可复用,逐出后重试
+            if cache.get(query) is task:
+                cache.pop(query, None)   # 失败任务不可复用;只逐自己等的那个,不逐新替换任务
             raise
 
     def restore():
@@ -166,12 +179,14 @@ async def _deterministic(samples):
                           if (st, s["id"]) in HITS else None for s in ss])
         retrieval_d[st], coverage_d[st] = r, c
 
-    _log(f"== 段1 检索 Recall@{K} / MRR(graded {len(graded)} 题 × {len(STRATEGIES)} 策略)==")
+    _log(f"== 段1 检索 Recall@{RECALL_K}/Recall@{K} / MRR(graded {len(graded)} 题 × {len(STRATEGIES)} 策略)==")
     for st in STRATEGIES:
-        parts = [f"{b}: R={_fmt(retrieval_d[st][b]['recall'])} M={_fmt(retrieval_d[st][b]['mrr'])}"
+        parts = [f"{b}: R5={_fmt(retrieval_d[st][b]['recall_at_5'])}"
+                 f" R10={_fmt(retrieval_d[st][b]['recall_at_10'])} M={_fmt(retrieval_d[st][b]['mrr'])}"
                  for b in GRADED_BUCKETS]
         ov = retrieval_d[st]["overall"]
-        _log(f"{st:>13} | " + " | ".join(parts) + f" | overall: R={_fmt(ov['recall'])} M={_fmt(ov['mrr'])}")
+        _log(f"{st:>13} | " + " | ".join(parts)
+             + f" | overall: R5={_fmt(ov['recall_at_5'])} R10={_fmt(ov['recall_at_10'])} M={_fmt(ov['mrr'])}")
     _log(f"== 段2 证据覆盖度(机械匹配 Top-{K} 证据 × expect_points)==")
     for st in STRATEGIES:
         parts = [f"{b}: {_fmt(coverage_d[st][b])}" for b in GRADED_BUCKETS]
@@ -354,6 +369,7 @@ def _build_meta(samples):
         "n_samples": len(samples),
         "strategies": STRATEGIES,
         "k": K,
+        "recall_k": RECALL_K,
         "chat_model": settings.chat_model,
         "embed_model": settings.embed_model,
         "rerank_model": settings.rerank_model,
@@ -366,7 +382,7 @@ def _build_meta(samples):
 async def main():
     _reset()
     samples = _load()
-    _log(f"评估集 {EVAL_FILE.name}:{len(samples)} 题 | 策略 {STRATEGIES} | K={K}")
+    _log(f"评估集 {EVAL_FILE.name}:{len(samples)} 题 | 策略 {STRATEGIES} | K={K} | Recall@{RECALL_K}")
     retrieval_d, coverage_d, HITS = await _deterministic(samples)   # 确定性,始终产出
     generation_d = None
     try:

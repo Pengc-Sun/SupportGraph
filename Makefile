@@ -1,4 +1,4 @@
-.PHONY: dev test eval eval-agent seed kb-build kb-vectorize kb-mine eval-retrieval seed-conv eval-mining kb-preview kb-reset milvus-up milvus-down smoke-rag eval-rag
+.PHONY: dev test eval eval-agent seed kb-build kb-vectorize kb-mine eval-retrieval seed-conv eval-mining kb-preview kb-reset milvus-up milvus-down smoke-rag eval-rag eval-check
 
 dev:
 	./scripts/dev.sh
@@ -55,3 +55,6 @@ smoke-rag:
 
 eval-rag:
 	PYTHONPATH=. uv run python scripts/eval_ch04.py
+
+eval-check:
+	PYTHONPATH=. uv run python scripts/validate_eval_ch04.py

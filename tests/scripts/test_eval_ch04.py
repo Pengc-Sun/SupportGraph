@@ -50,7 +50,7 @@ def test_coverage_mech_partial_none_and_empty():
     assert ev._coverage_mech(["甲"], []) == 0.0
 
 
-# ---------- 段1 Recall@K / MRR(Ruling 21-4) ----------
+# ---------- 段1 Recall@5 / Recall@10 / MRR(Ruling 21-4 + 24-4) ----------
 
 def test_section_match_substring_and_rank():
     hits = [_hit(section="售前/运费怎么算"), _hit(section="售后/退货政策是什么")]
@@ -64,7 +64,8 @@ def test_recall_mrr_first_hit_rank2():
     samples = [{"id": "q1", "expect_section": ["退货政策"]}]
     hits = {"q1": [_hit(section="售前/运费怎么算"), _hit(section="售后/退货政策是什么")]}
     out = ev._recall_mrr(samples, hits)
-    assert out["recall"] == 1.0
+    assert out["recall_at_5"] == 1.0
+    assert out["recall_at_10"] == 1.0
     assert out["mrr"] == 0.5
 
 
@@ -73,9 +74,54 @@ def test_recall_mrr_no_hit_and_aggregation():
                {"id": "q2", "expect_section": ["发货时效"]}]
     hits = {"q1": [_hit(section="售后/退货政策是什么")], "q2": []}
     out = ev._recall_mrr(samples, hits)
-    assert out["recall"] == 0.5
+    assert out["recall_at_5"] == 0.5
+    assert out["recall_at_10"] == 0.5
     assert out["mrr"] == 0.5  # (1.0 + 0) / 2
     assert ev._recall_mrr([samples[1]], {"q2": []})["mrr"] == 0.0
+
+
+def test_recall_depths_separated_rank7():
+    # 命中在第 7 位:@5 记 0、@10 记 1;MRR 仍按 top-10 内名次
+    assert ev.RECALL_K == 5 and ev.K == 10
+    samples = [{"id": "q1", "expect_section": ["退货政策"]}]
+    hits = {"q1": [_hit(section=f"售前/无关{i}", hid=f"h{i}") for i in range(6)]
+                  + [_hit(section="售后/退货政策是什么", hid="h7")]}
+    out = ev._recall_mrr(samples, hits)
+    assert out["recall_at_5"] == 0.0
+    assert out["recall_at_10"] == 1.0
+    assert out["mrr"] == pytest.approx(1 / 7)
+
+
+def test_recall_multi_group_partial_credit_and_group_mean_mrr():
+    # E_multi:两组证据只凑齐一组 → recall 0.5;MRR 按各组名次倒数取平均
+    samples = [{"id": "e1", "expect_section": [],
+                "expect_sections_all": [["MH-W40"], ["MH-W60"]]}]
+    hits = {"e1": [_hit(section="商品规格手册 / 饮水机系列 / MH-W40 自动饮水机 Plus / 参数"),
+                   _hit(section="售前/无关"), _hit(section="售前/无关2"),
+                   _hit(section="商品规格手册 / 饮水机系列 / MH-W60 自动饮水机 Pro 不锈钢 / 参数")]}
+    out = ev._recall_mrr(samples, hits)
+    assert out["recall_at_5"] == 1.0 and out["recall_at_10"] == 1.0
+    assert out["mrr"] == pytest.approx((1.0 + 0.25) / 2)   # 名次 1 和 4 → 0.625
+
+    # 第二组彻底缺席 → recall 0.5,缺席组 MRR 项记 0
+    hits = {"e1": hits["e1"][:1]}
+    out = ev._recall_mrr(samples, hits)
+    assert out["recall_at_5"] == 0.5 and out["recall_at_10"] == 0.5
+    assert out["mrr"] == 0.5   # (1.0 + 0) / 2,不是"最后一块到位"口径
+
+
+def test_recall_multi_group_depth5_partial():
+    # 一组在前 5、另一组在第 6-10:@5 半分、@10 全分
+    samples = [{"id": "e1", "expect_section": [],
+                "expect_sections_all": [["退货政策"], ["保修说明"]]}]
+    hits = {"e1": [_hit(section="售后/退货政策是什么")]
+                  + [_hit(section=f"售前/无关{i}", hid=f"h{i}") for i in range(5)]
+                  + [_hit(section="售后手册 / 保修说明", hid="h7")]}
+    out = ev._recall_mrr(samples, hits)
+    assert out["recall_at_5"] == 0.5
+    assert out["recall_at_10"] == 1.0
+    assert out["mrr"] == pytest.approx((1.0 + 1 / 7) / 2)
+    assert out["n"] == 1
 
 
 # ---------- _try 超时/异常记账(Ruling 21-5) ----------
@@ -131,6 +177,9 @@ async def test_deterministic_mock_aggregation_and_hits(monkeypatch):
          "expect_section": ["发货时效"], "expect_points": ["48 小时内发货"], "should_refuse": False},
         {"id": "c1", "bucket": "C_colloquial", "query": "退货咋整",
          "expect_section": ["退货政策"], "expect_points": ["7 天无理由退货"], "should_refuse": False},
+        {"id": "e1", "bucket": "E_multi", "query": "俩饮水机换芯周期各多久",
+         "expect_section": [], "expect_sections_all": [["MH-W40"], ["MH-W60"]],
+         "expect_points": ["每 3 周更换一次滤芯", "每 4 周更换一次滤芯"], "should_refuse": False},
         {"id": "d1", "bucket": "D_absent", "query": "有恐龙卖吗",
          "expect_section": [], "expect_points": [], "should_refuse": True},
     ]
@@ -142,28 +191,38 @@ async def test_deterministic_mock_aggregation_and_hits(monkeypatch):
             return []
         if query in ("几天无理由退货", "退货咋整"):
             return [_hit(answer="支持7天无理由退货")]
+        if query == "俩饮水机换芯周期各多久":
+            return [_hit(section="商品规格手册 / 饮水机系列 / MH-W40 自动饮水机 Plus / 参数",
+                         answer="建议每 3 周更换一次滤芯", hid="w40"),
+                    _hit(section="商品规格手册 / 饮水机系列 / MH-W60 自动饮水机 Pro 不锈钢 / 参数",
+                         answer="建议每 4 周更换一次滤芯", hid="w60")]
         return [_hit(section="售前/运费怎么算", answer="满99包邮")]
 
     monkeypatch.setattr(retrieval, "search_knowledge", fake_search)
     retrieval_d, coverage_d, HITS = await ev._deterministic(samples)
 
     # 每(策略,题)只检索一次;top_k=K、无 min_score;D 桶不进确定性段
-    assert len(seen) == 4 * 3
+    assert len(seen) == 4 * 4
     assert all(t[2] == ev.K and t[3] is None for t in seen)
-    assert set(HITS) == {(st, s["id"]) for st in ev.STRATEGIES for s in samples[:3]}
+    assert set(HITS) == {(st, s["id"]) for st in ev.STRATEGIES for s in samples[:4]}
 
-    assert retrieval_d["vector"]["overall"]["recall"] == 0.0
+    assert retrieval_d["vector"]["overall"]["recall_at_5"] == 0.0
+    assert retrieval_d["vector"]["overall"]["recall_at_10"] == 0.0
     assert retrieval_d["vector"]["overall"]["mrr"] == 0.0
     for st in ("bm25", "hybrid", "hybrid_rerank"):
         r = retrieval_d[st]
-        assert r["A_policy"]["recall"] == 1.0 and r["A_policy"]["mrr"] == 1.0
-        assert r["B_model"]["recall"] == 0.0 and r["B_model"]["mrr"] == 0.0
-        assert r["C_colloquial"]["recall"] == 1.0
-        assert r["overall"]["recall"] == pytest.approx(2 / 3)
-        assert r["overall"]["mrr"] == pytest.approx(2 / 3)
+        assert r["A_policy"]["recall_at_5"] == 1.0 and r["A_policy"]["mrr"] == 1.0
+        assert r["B_model"]["recall_at_5"] == 0.0 and r["B_model"]["mrr"] == 0.0
+        assert r["C_colloquial"]["recall_at_10"] == 1.0
+        # E 桶两组全命中:recall 满分,MRR 按组平均 (1 + 1/2)/2
+        assert r["E_multi"] == {"recall_at_5": 1.0, "recall_at_10": 1.0,
+                                "mrr": 0.75, "n": 1}
+        assert r["overall"]["recall_at_5"] == pytest.approx(3 / 4)
+        assert r["overall"]["mrr"] == pytest.approx((1 + 0 + 1 + 0.75) / 4)
         c = coverage_d[st]
         assert c["A_policy"] == 1.0 and c["B_model"] == 0.0 and c["C_colloquial"] == 1.0
-        assert c["overall"] == pytest.approx(2 / 3)
+        assert c["E_multi"] == 1.0
+        assert c["overall"] == pytest.approx(3 / 4)
     assert coverage_d["vector"]["overall"] == 0.0
 
 
@@ -274,6 +333,7 @@ def test_build_meta_models_and_n_chunks(monkeypatch):
     assert meta["judge_model"] == meta["chat_model"] == ev.settings.chat_model
     assert meta["n_chunks"] == 321
     assert meta["k"] == ev.K and meta["strategies"] == ev.STRATEGIES
+    assert meta["recall_k"] == ev.RECALL_K == 5   # 召回口径与检索深度分开配
     assert meta["eval_file"] == str(ev.EVAL_FILE)
     assert "timestamp" in meta and meta["errors"] == []
 
@@ -368,6 +428,33 @@ async def test_cached_understand_evicts_failed_task_and_retries(monkeypatch):
         restore()
 
 
+async def test_cached_understand_failure_eviction_identity_guard(monkeypatch):
+    # 失败逐出须验明正身:A 失败后立刻重试装入新任务,B 的失败收尾不得误逐新任务
+    calls = []
+
+    async def fake(query):
+        calls.append(query)
+        if len(calls) == 1:
+            raise RuntimeError("upstream down")
+        await asyncio.sleep(0.05)
+        return {"standard": query, "expanded": []}
+
+    monkeypatch.setattr(retrieval, "understand", fake)
+    restore = ev._install_cached_understand()
+    try:
+        async def waiter():
+            with pytest.raises(RuntimeError):
+                await retrieval.understand("q1")
+            return await retrieval.understand("q1")   # 失败后立刻重试
+
+        a, b = await asyncio.gather(waiter(), waiter())
+        assert a == b == {"standard": "q1", "expanded": []}
+        # 只失败一次 + 重试一次:B 复用 A 装入的新任务,而不是再发起第三次真实调用
+        assert calls == ["q1", "q1"]
+    finally:
+        restore()
+
+
 def test_install_cached_understand_restore_and_idempotent(monkeypatch):
     async def fake(query):
         return {"standard": query, "expanded": []}
@@ -406,14 +493,15 @@ async def test_deterministic_isolates_single_point_failure(monkeypatch, tmp_path
     assert ("vector", "a1") not in HITS
     assert "retr task: CancelledError" in ev._errs
     # 失败题:recall/MRR 记 0,覆盖度 None 不计均值;其余题/策略不受影响
-    assert retrieval_d["vector"]["A_policy"] == {"recall": 0.0, "mrr": 0.0, "n": 1}
-    assert retrieval_d["vector"]["overall"]["recall"] == 0.0
+    assert retrieval_d["vector"]["A_policy"] == {"recall_at_5": 0.0, "recall_at_10": 0.0,
+                                                 "mrr": 0.0, "n": 1}
+    assert retrieval_d["vector"]["overall"]["recall_at_5"] == 0.0
     assert coverage_d["vector"]["A_policy"] is None
     assert coverage_d["vector"]["B_model"] == 0.0
     assert coverage_d["vector"]["overall"] == 0.0
     for st in ("bm25", "hybrid", "hybrid_rerank"):
-        assert retrieval_d[st]["A_policy"]["recall"] == 1.0
-        assert retrieval_d[st]["overall"]["recall"] == 0.5
+        assert retrieval_d[st]["A_policy"]["recall_at_10"] == 1.0
+        assert retrieval_d[st]["overall"]["recall_at_5"] == 0.5
         assert coverage_d[st]["A_policy"] == 1.0
         assert coverage_d[st]["overall"] == 0.5
 
@@ -422,5 +510,5 @@ async def test_deterministic_isolates_single_point_failure(monkeypatch, tmp_path
     monkeypatch.setattr(ev, "_OUT_JSON", tmp_path / "r.json")
     ev._write_report(retrieval_d, coverage_d, None, {"errors": list(ev._errs)})
     report = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
-    assert report["retrieval"]["vector"]["A_policy"]["recall"] == 0.0
+    assert report["retrieval"]["vector"]["A_policy"]["recall_at_5"] == 0.0
     assert report["generation"] is None
