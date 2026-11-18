@@ -3,7 +3,15 @@ from datetime import datetime
 from sqlalchemy import func, select
 
 import app.db.base as db          # 用模块属性引用,便于测试 monkeypatch async_session
-from app.db.models import Conversation, Faq, KnowledgeChunk, Message, QaExtractionStaging, Ticket
+from app.db.models import (
+    Conversation,
+    Faq,
+    KnowledgeChunk,
+    LowConfidenceQuestion,
+    Message,
+    QaExtractionStaging,
+    Ticket,
+)
 
 _TICKET_SEQ = 0
 
@@ -155,6 +163,20 @@ async def set_staging_status(ids: list[int], status: str) -> None:
             if row is not None:
                 row.status = status
         await s.commit()
+
+async def insert_low_confidence(
+    conversation_id: int | None, raw_question: str, source: str, reason: str | None
+) -> int:
+    """低置信问题池写入;source ∈ {retrieval_low_conf, self_check, user_feedback}。"""
+    async with db.async_session() as s:
+        row = LowConfidenceQuestion(
+            conversation_id=conversation_id, raw_question=raw_question,
+            source=source, reason=reason,
+        )
+        s.add(row)
+        await s.commit()
+        await s.refresh(row)
+        return row.id
 
 async def list_conversations_with_messages() -> list[tuple[int, list[Message]]]:
     async with db.async_session() as s:
