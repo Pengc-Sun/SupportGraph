@@ -99,22 +99,40 @@ def _recall_mrr(samples, hits_by_id):
 
 def _install_cached_understand():
     """同一 query 四策略只触发一次真实改写(Ruling 21-3):
-    缓存 Task 而非结果,并发同 query 也共享同一次上游调用。"""
+    缓存 Task 而非结果,并发同 query 也共享同一次上游调用。
+    返回 restore 可调用;重复安装不叠加包装。"""
     real = retrieval.understand
+    if getattr(real, "_eval_restore", None) is not None:
+        return real._eval_restore
     cache: dict[str, asyncio.Task] = {}
 
     async def cached_understand(query: str) -> dict:
         if query not in cache:
             cache[query] = asyncio.ensure_future(real(query))
-        return await cache[query]
+        task = cache[query]
+        try:
+            # shield:单个 waiter 超时取消不能杀死共享 Task(其他策略还在等它)
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                cache.pop(query, None)   # 共享任务已死:逐出,下一策略重试
+            return {"standard": query, "expanded": []}   # waiter 侧取消:降级原 query
+        except Exception:
+            cache.pop(query, None)   # 失败任务不可复用,逐出后重试
+            raise
 
+    def restore():
+        if retrieval.understand is cached_understand:
+            retrieval.understand = real
+
+    cached_understand._eval_restore = restore
     retrieval.understand = cached_understand
-    return cached_understand
+    return restore
 
 
 async def _deterministic(samples):
     """段1+2:每(策略,题)检索一次存 HITS,复用算 Recall/MRR + 证据覆盖度。"""
-    _install_cached_understand()
+    restore = _install_cached_understand()
     graded = [s for s in samples if s["bucket"] in GRADED_BUCKETS]
     sem = asyncio.Semaphore(RETR_CONCURRENCY)
     HITS: dict[tuple, list] = {}
@@ -126,17 +144,25 @@ async def _deterministic(samples):
                 f"retr {strategy} {s['id']}")
         HITS[(strategy, s["id"])] = hits or []
 
-    await asyncio.gather(*(one(st, s) for st in STRATEGIES for s in graded),
-                         return_exceptions=True)
+    try:
+        results = await asyncio.gather(*(one(st, s) for st in STRATEGIES for s in graded),
+                                       return_exceptions=True)
+    finally:
+        restore()
+    for r in results:
+        if isinstance(r, BaseException):
+            _errs.append(f"retr task: {type(r).__name__}")   # 单点死亡记账,聚合照常
 
     retrieval_d, coverage_d = {}, {}
     for st in STRATEGIES:
         r, c = {}, {}
         for b in [*GRADED_BUCKETS, "overall"]:
             ss = graded if b == "overall" else [s for s in graded if s["bucket"] == b]
-            hits_map = {s["id"]: HITS[(st, s["id"])] for s in ss}
+            # 缺 HITS(单点失败)→ recall/MRR 记 0、覆盖度 None 不计均值,绝不 KeyError
+            hits_map = {s["id"]: HITS.get((st, s["id"]), []) for s in ss}
             r[b] = _recall_mrr(ss, hits_map)
-            c[b] = _mean([_coverage_mech(s["expect_points"], hits_map[s["id"]]) for s in ss])
+            c[b] = _mean([_coverage_mech(s["expect_points"], hits_map[s["id"]])
+                          if (st, s["id"]) in HITS else None for s in ss])
         retrieval_d[st], coverage_d[st] = r, c
 
     _log(f"== 段1 检索 Recall@{K} / MRR(graded {len(graded)} 题 × {len(STRATEGIES)} 策略)==")

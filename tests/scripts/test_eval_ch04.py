@@ -108,13 +108,17 @@ async def test_cached_understand_once_per_unique_query(monkeypatch):
         return {"standard": query, "expanded": []}
 
     monkeypatch.setattr(retrieval, "understand", fake)
-    ev._install_cached_understand()
-    # 并发同 query 也只触发一次真实改写
-    await asyncio.gather(*(retrieval.understand("q1") for _ in range(4)),
-                         retrieval.understand("q2"))
-    await retrieval.understand("q1")
-    assert calls.count("q1") == 1
-    assert calls.count("q2") == 1
+    restore = ev._install_cached_understand()
+    try:
+        # 并发同 query 也只触发一次真实改写
+        await asyncio.gather(*(retrieval.understand("q1") for _ in range(4)),
+                             retrieval.understand("q2"))
+        await retrieval.understand("q1")
+        assert calls.count("q1") == 1
+        assert calls.count("q2") == 1
+    finally:
+        restore()
+    assert retrieval.understand is fake
 
 
 # ---------- 段1+2 端到端(mock 检索) ----------
@@ -255,3 +259,134 @@ def test_write_report_generation_none(tmp_path, monkeypatch):
     # ensure_ascii=False:json 原文保留中文
     ev._write_report({"向量": {}}, {}, None, meta)
     assert "向量" in js.read_text(encoding="utf-8")
+
+
+# ---------- 回归:共享改写任务屏蔽取消 + 单点隔离 + 缓存可恢复(review Finding 1/2) ----------
+
+async def test_cached_understand_waiter_timeout_spares_shared_task(monkeypatch):
+    # waiter A 超时不得取消共享 Task:waiter B 仍拿到真实改写结果
+    monkeypatch.setattr(ev, "CALL_TIMEOUT", 0.02)
+    calls, cancelled = [], []
+
+    async def fake(query):
+        calls.append(query)
+        try:
+            await asyncio.sleep(0.15)
+            return {"standard": query + "-std", "expanded": ["扩展"]}
+        except asyncio.CancelledError:
+            cancelled.append(query)
+            raise
+
+    monkeypatch.setattr(retrieval, "understand", fake)
+    restore = ev._install_cached_understand()
+    try:
+        a, b = await asyncio.gather(
+            ev._try(retrieval.understand("q1"), "waiterA"),
+            retrieval.understand("q1"))
+        # A 的超时取消被 wrapper 屏蔽并降级原 query;B 不受影响拿到真实改写
+        assert a == {"standard": "q1", "expanded": []}
+        assert b == {"standard": "q1-std", "expanded": ["扩展"]}
+        assert cancelled == []   # 共享 fake 调用未被取消
+        assert calls == ["q1"]
+        # 缓存未被死任务污染:后续策略复用同一结果
+        assert await retrieval.understand("q1") == b
+        assert calls == ["q1"]
+    finally:
+        restore()
+
+
+async def test_cached_understand_cancelled_waiter_degrades(monkeypatch):
+    # waiter 被外部取消 → 降级原 query,CancelledError 不得逃逸杀死调用方
+    async def fake(query):
+        await asyncio.sleep(0.05)
+        return {"standard": query + "-std", "expanded": []}
+
+    monkeypatch.setattr(retrieval, "understand", fake)
+    restore = ev._install_cached_understand()
+    try:
+        t = asyncio.create_task(retrieval.understand("q1"))
+        await asyncio.sleep(0)   # 让 t 先跑到 await 共享任务处
+        t.cancel()
+        assert await t == {"standard": "q1", "expanded": []}
+        await asyncio.sleep(0.1)   # 收尾:让共享任务自然跑完,不留悬任务
+    finally:
+        restore()
+
+
+async def test_cached_understand_evicts_failed_task_and_retries(monkeypatch):
+    # 共享调用失败后缓存须逐出:下一策略对同 query 重新发起真实调用
+    calls = []
+
+    async def fake(query):
+        calls.append(query)
+        if len(calls) == 1:
+            raise RuntimeError("upstream down")
+        return {"standard": query, "expanded": []}
+
+    monkeypatch.setattr(retrieval, "understand", fake)
+    restore = ev._install_cached_understand()
+    try:
+        with pytest.raises(RuntimeError):
+            await retrieval.understand("q1")
+        assert await retrieval.understand("q1") == {"standard": "q1", "expanded": []}
+        assert calls == ["q1", "q1"]
+    finally:
+        restore()
+
+
+def test_install_cached_understand_restore_and_idempotent(monkeypatch):
+    async def fake(query):
+        return {"standard": query, "expanded": []}
+
+    monkeypatch.setattr(retrieval, "understand", fake)
+    restore = ev._install_cached_understand()
+    wrapped = retrieval.understand
+    assert wrapped is not fake
+    restore2 = ev._install_cached_understand()   # 重复安装不叠加包装
+    assert retrieval.understand is wrapped
+    restore2()
+    assert retrieval.understand is fake
+    restore()   # restore 幂等
+    assert retrieval.understand is fake
+
+
+async def test_deterministic_isolates_single_point_failure(monkeypatch, tmp_path):
+    # 单(策略,题)死亡(CancelledError 穿透 _try)→ 记账 + 缺 HITS 不 KeyError,报告仍产出
+    samples = [
+        {"id": "a1", "bucket": "A_policy", "query": "几天无理由退货",
+         "expect_section": ["退货政策"], "expect_points": ["7 天无理由退货"], "should_refuse": False},
+        {"id": "b1", "bucket": "B_model", "query": "多久发货",
+         "expect_section": ["发货时效"], "expect_points": ["48 小时内发货"], "should_refuse": False},
+    ]
+
+    async def fake_search(query, strategy="hybrid_rerank", top_k=None, **kw):
+        if strategy == "vector" and query == "几天无理由退货":
+            raise asyncio.CancelledError()
+        return [_hit(answer="支持7天无理由退货")]
+
+    orig_understand = retrieval.understand
+    monkeypatch.setattr(retrieval, "search_knowledge", fake_search)
+    retrieval_d, coverage_d, HITS = await ev._deterministic(samples)
+    assert retrieval.understand is orig_understand   # 确定性段结束须还原改写函数
+
+    assert ("vector", "a1") not in HITS
+    assert "retr task: CancelledError" in ev._errs
+    # 失败题:recall/MRR 记 0,覆盖度 None 不计均值;其余题/策略不受影响
+    assert retrieval_d["vector"]["A_policy"] == {"recall": 0.0, "mrr": 0.0, "n": 1}
+    assert retrieval_d["vector"]["overall"]["recall"] == 0.0
+    assert coverage_d["vector"]["A_policy"] is None
+    assert coverage_d["vector"]["B_model"] == 0.0
+    assert coverage_d["vector"]["overall"] == 0.0
+    for st in ("bm25", "hybrid", "hybrid_rerank"):
+        assert retrieval_d[st]["A_policy"]["recall"] == 1.0
+        assert retrieval_d[st]["overall"]["recall"] == 0.5
+        assert coverage_d[st]["A_policy"] == 1.0
+        assert coverage_d[st]["overall"] == 0.5
+
+    # 确定性段始终能落报告
+    monkeypatch.setattr(ev, "_OUT_TXT", tmp_path / "r.txt")
+    monkeypatch.setattr(ev, "_OUT_JSON", tmp_path / "r.json")
+    ev._write_report(retrieval_d, coverage_d, None, {"errors": list(ev._errs)})
+    report = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert report["retrieval"]["vector"]["A_policy"]["recall"] == 0.0
+    assert report["generation"] is None
