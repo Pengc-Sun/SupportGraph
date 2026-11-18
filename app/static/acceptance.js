@@ -61,6 +61,7 @@
     "kb-mine": "对话挖知识",
     "kb-reset": "重跑 清库重建",
     "seed-conv": "灌历史会话种子",
+    "eval-rag": "重跑 RAG 评估",
   };
   const logCache = {};   // name -> 最近一次日志尾
   const state = {};      // name -> {running, exit_code, started}
