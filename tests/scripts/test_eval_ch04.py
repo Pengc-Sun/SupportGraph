@@ -229,6 +229,19 @@ async def test_deterministic_mock_aggregation_and_hits(monkeypatch):
 
 # ---------- judge 宽容解析(Ruling 17 模式) ----------
 
+def test_judge_chain_temperature_zero(monkeypatch):
+    # T20 尺子去抖:两个裁判共用的 _judge_chain 显式 temperature=0
+    seen = {}
+    real = ev.get_chat_model
+
+    def spy(**kw):
+        seen.update(kw)
+        return real(**kw)
+    monkeypatch.setattr(ev, "get_chat_model", spy)
+    ev._judge_chain(ev.FAITHFULNESS_PROMPT, ev.Faithfulness)
+    assert seen["temperature"] == 0
+    assert seen["extra_body"] == {"thinking": {"type": "disabled"}}
+
 def _raw_result(parsed=None, args=None, tool_name="Tool"):
     raw = AIMessage(content="", tool_calls=[{"name": tool_name, "args": args, "id": "x"}]) \
         if args is not None else AIMessage(content="")

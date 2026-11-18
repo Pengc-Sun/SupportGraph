@@ -218,7 +218,8 @@ COVERAGE_JUDGE_PROMPT = ChatPromptTemplate.from_messages([
 
 def _judge_chain(prompt, schema):
     # 同 selfcheck(Ruling 17/18):关 thinking + function_calling + include_raw 宽容解析
-    model = get_chat_model(extra_body={"thinking": {"type": "disabled"}})
+    # T20 尺子去抖:裁判 temperature=0,同一输入重放不再抖
+    model = get_chat_model(temperature=0, extra_body={"thinking": {"type": "disabled"}})
     return prompt | model.with_structured_output(schema, method="function_calling", include_raw=True)
 
 
