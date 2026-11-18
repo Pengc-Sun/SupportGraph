@@ -66,7 +66,11 @@ def flush(client: MilvusClient, collection: str = COLLECTION) -> None:
 
 
 def _cat_expr(category: str | None) -> str:
-    return f'category == "{category}"' if category else ""
+    if not category:
+        return ""
+    # 转义反斜杠与双引号,防表达式解析炸/注入(batch B deferred minor)
+    escaped = category.replace("\\", "\\\\").replace('"', '\\"')
+    return f'category == "{escaped}"'
 
 
 def _hit(h: dict) -> dict:
@@ -110,3 +114,5 @@ def count(client, collection: str = COLLECTION) -> int:
 def drop(client, collection: str) -> None:
     if client.has_collection(collection):
         client.drop_collection(collection)
+    if client is _CLIENT:
+        _ensured.discard(collection)  # 幂等缓存同步失效,否则重建集合被跳过

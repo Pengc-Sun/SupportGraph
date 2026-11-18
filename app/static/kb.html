@@ -81,11 +81,16 @@
     <!-- ⑤ 检索自测 -->
     <section class="panel" id="search">
       <h2>⑤ 检索自测</h2>
-      <div class="p-sub">问题向量化 → Milvus dense 单路 Top-K,当场看召回哪几块、各自多少分。低于阈值算未命中。</div>
+      <div class="p-sub">Query 理解(归一+同义词)→ 按路线检索 Top-K,当场看召回哪几块、各自多少分。传了阈值才过滤;混合+重排显示 rerank 分。</div>
       <div class="row">
         <input type="text" id="s-query" placeholder="换个说法问一句,例如:邮费是多少" style="flex:1;min-width:200px">
         <label>路线</label>
-        <select id="s-route"><option value="dense">dense 向量单路</option></select>
+        <select id="s-route">
+          <option value="vector">dense 向量单路</option>
+          <option value="bm25">BM25 关键词</option>
+          <option value="hybrid">混合 RRF</option>
+          <option value="hybrid_rerank">混合+重排</option>
+        </select>
         <label>Top-K</label>
         <input type="number" id="s-topk" value="3" min="1" max="20" style="width:64px">
         <button class="btn primary" id="btn-search">检索</button>
@@ -307,13 +312,16 @@ async function doSearch() {
   if (!query) { A.toast("先输一句问话", "warn"); return; }
   $("search-out").innerHTML = '<span class="muted">检索中…</span>';
   try {
-    const d = await A.post("/api/kb/search", { query, top_k: Number($("s-topk").value) || 3 });
+    const d = await A.post("/api/kb/search", {
+      query, strategy: $("s-route").value, top_k: Number($("s-topk").value) || 3,
+    });
     $("search-out").innerHTML = d.hits.length
       ? d.hits.map(h =>
-        '<div class="hit"><div class="h-head"><span class="h-score">' + h.score.toFixed(4) + "</span>"
+        '<div class="hit"><div class="h-head"><span class="h-score">'
+        + (h.rerank_score !== undefined ? h.rerank_score : h.score).toFixed(4) + "</span>"
         + A.pill("id " + h.id, "mute") + "<b>" + A.esc(h.question) + "</b></div>"
         + '<div class="h-a">' + A.esc(h.answer) + "</div></div>").join("")
-      : '<span class="muted">未命中(全部低于阈值,或库里还没有向量)。低于阈值保留空 hits 分支,与 query_faq 契约一致。</span>';
+      : '<span class="muted">未命中(低于阈值,或库里还没有向量)。低于阈值保留空 hits 分支,与 query_faq 契约一致。</span>';
   } catch (e) {
     $("search-out").innerHTML = '<div class="err-text">' + A.esc(e.message) + "</div>";
   }

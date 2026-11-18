@@ -44,7 +44,8 @@ def milvus(monkeypatch):
     milvus_client.ensure_collection(c, collection=name)
     monkeypatch.setattr(milvus_client, "get_client", lambda uri=None: c)
     monkeypatch.setattr(milvus_client, "COLLECTION", name)
-    for fn in ("ensure_collection", "upsert_vectors", "flush", "count", "dense_search"):
+    for fn in ("ensure_collection", "upsert_vectors", "flush", "count",
+               "dense_search", "bm25_search", "hybrid_search"):
         orig = getattr(milvus_client, fn)
         def wrap(*args, _orig=orig, **kwargs):
             kwargs["collection"] = name
@@ -281,6 +282,8 @@ async def test_search_endpoint(client, milvus, monkeypatch):
     async def fake_query(q):
         return v_hit
     monkeypatch.setattr("app.core.retrieval.embeddings.embed_query", fake_query)
+    async def fake_understand(q): return {"standard": q, "expanded": []}
+    monkeypatch.setattr("app.core.retrieval.understand", fake_understand)
     async with client as c:
         r = await c.post("/api/kb/search", json={"query": "邮费是多少", "top_k": 1, "min_score": 0.5})
         assert r.status_code == 200
@@ -290,9 +293,24 @@ async def test_search_endpoint(client, milvus, monkeypatch):
         # 阈值抬高 → 过滤
         r2 = await c.post("/api/kb/search", json={"query": "邮费", "min_score": 0.999999})
         assert r2.json()["hits"] == [] or all(h["score"] >= 0.999999 for h in r2.json()["hits"])
+        # strategy 透传:bm25 关键词单路命中 text 含「运费」的块
+        r4 = await c.post("/api/kb/search", json={"query": "运费", "strategy": "bm25", "top_k": 2})
+        assert r4.status_code == 200
+        assert r4.json()["hits"] and r4.json()["hits"][0]["id"] == 1
         # 空 query → 400
         r3 = await c.post("/api/kb/search", json={"query": "  "})
         assert r3.status_code == 400
+
+
+async def test_search_rejects_unknown_strategy(client, milvus, monkeypatch):
+    async def fake_understand(q): return {"standard": q, "expanded": []}
+    monkeypatch.setattr("app.core.retrieval.understand", fake_understand)
+    async def fake_query(q): return [1.0] + [0.0] * (milvus_client.DIM - 1)
+    monkeypatch.setattr("app.core.retrieval.embeddings.embed_query", fake_query)
+    async with client as c:
+        r = await c.post("/api/kb/search", json={"query": "运费", "strategy": "nope"})
+        assert r.status_code == 400
+        assert "strategy" in r.json()["detail"]
 
 
 # ---- 暂存表 ----

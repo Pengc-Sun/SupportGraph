@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from langchain_core.tools import InjectedToolArg, tool
 from pydantic import BaseModel, Field
 
+from app.config import settings
 from app.core import retrieval
 from app.db import repository
 
@@ -58,7 +59,10 @@ class FaqInput(BaseModel):
 @tool(args_schema=FaqInput)
 async def query_faq(keyword: str) -> dict:
     """根据关键词查询常见问题解答(FAQ)。用于用户咨询政策、规则、操作流程等通用问题时。"""
-    hits = await retrieval.search_knowledge(keyword)
+    # ch04 过渡期显式走 ch03 在线行为(dense 单路 + 阈值),T10 再换 RAG 管线
+    hits = await retrieval.search_knowledge(
+        keyword, strategy="vector",
+        top_k=settings.retrieval_top_k, min_score=settings.retrieval_min_score)
     if not hits:
         return {"hits": [], "message": f"未找到与「{keyword}」相关的常见问题"}
     return {"hits": [{"question": h["question"], "answer": h["answer"]} for h in hits]}

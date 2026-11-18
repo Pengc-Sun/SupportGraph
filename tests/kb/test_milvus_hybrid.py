@@ -49,6 +49,35 @@ def test_category_filter(coll):
     assert all(h["id"] == 1 for h in hits)
 
 
+def test_category_with_quote_and_backslash(coll):
+    # Ruling 15.4:_cat_expr 须转义反斜杠与双引号,否则表达式解析炸/注入
+    client, name = coll
+    tricky = '运费"special\\'
+    mc.upsert_vectors(client, [{
+        "id": 3, "dense": [0.1] * 1024, "text": "运费 特殊 分类",
+        "question": "特殊分类运费", "answer": "同运费政策",
+        "section_path": "运费政策", "content_type": "faq", "category": tricky,
+    }], collection=name)
+    mc.flush(client, collection=name)
+    import time; time.sleep(2)
+    hits = mc.bm25_search(client, "特殊 分类", top_k=5, category=tricky, collection=name)
+    assert hits and all(h["id"] == 3 and h["category"] == tricky for h in hits)
+    dense_hits = mc.dense_search(client, [0.1] * 1024, top_k=5, category=tricky, collection=name)
+    assert dense_hits and all(h["id"] == 3 for h in dense_hits)
+
+
+def test_drop_discards_ensured_for_singleton(monkeypatch):
+    # Ruling 15.4:单例 drop 后 _ensured 须同步移除,否则重建集合被幂等缓存跳过
+    class FakeClient:
+        def has_collection(self, name): return True
+        def drop_collection(self, name): pass
+    fake = FakeClient()
+    monkeypatch.setattr(mc, "_CLIENT", fake)
+    monkeypatch.setattr(mc, "_ensured", {"gone"})
+    mc.drop(fake, "gone")
+    assert "gone" not in mc._ensured
+
+
 def test_upsert_is_idempotent_by_pk(coll):
     # ch03 回归迁移:同 id 重写不产生重复行(按 PK upsert 幂等)
     client, name = coll

@@ -43,7 +43,9 @@ async def test_search_returns_top_hits_above_threshold(monkeypatch, milvus):
     query_vec = [1.0, 0.0, 1.0] + [0.0] * (milvus_client.DIM - 3)
     monkeypatch.setattr("app.core.retrieval.embeddings.embed_query",
                         lambda q: _coro(query_vec))
-    hits = await retrieval.search_knowledge("邮费是多少", top_k=1, min_score=0.5,
+    async def fake_understand(q): return {"standard": q, "expanded": []}
+    monkeypatch.setattr("app.core.retrieval.understand", fake_understand)
+    hits = await retrieval.search_knowledge("邮费是多少", strategy="vector", top_k=1, min_score=0.5,
                                             client=c, collection=name)
     assert hits and hits[0]["question"] == "运费怎么算"
 
@@ -52,6 +54,8 @@ async def test_below_threshold_filtered(monkeypatch, milvus):
     c, name = milvus
     monkeypatch.setattr("app.core.retrieval.embeddings.embed_query",
                         lambda q: _coro([1.0, 0.0, 1.0] + [0.0] * (milvus_client.DIM - 3)))
-    hits = await retrieval.search_knowledge("邮费", top_k=2, min_score=0.999999,
+    async def fake_understand(q): return {"standard": q, "expanded": []}
+    monkeypatch.setattr("app.core.retrieval.understand", fake_understand)
+    hits = await retrieval.search_knowledge("邮费", strategy="vector", top_k=2, min_score=0.999999,
                                             client=c, collection=name)
     assert hits == [] or all(h["score"] >= 0.999999 for h in hits)

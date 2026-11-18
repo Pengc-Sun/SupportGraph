@@ -34,6 +34,7 @@ class IngestRequest(PreviewRequest):
 
 class SearchRequest(BaseModel):
     query: str = ""
+    strategy: str = "vector"
     top_k: int | None = None
     min_score: float | None = None
 
@@ -204,9 +205,12 @@ async def vectorize() -> dict:
 async def search(req: SearchRequest) -> dict:
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query 为空")
+    if req.strategy not in retrieval.STRATEGIES:
+        raise HTTPException(
+            status_code=400, detail=f"strategy 必须是 {list(retrieval.STRATEGIES)} 之一")
     try:
         hits = await retrieval.search_knowledge(
-            req.query, top_k=req.top_k, min_score=req.min_score)
+            req.query, strategy=req.strategy, top_k=req.top_k, min_score=req.min_score)
     except Exception as exc:
         logger.exception("检索自测失败")
         raise HTTPException(status_code=502, detail=f"检索失败:{exc}") from exc
